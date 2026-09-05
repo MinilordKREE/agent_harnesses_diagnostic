@@ -432,6 +432,7 @@ def diagnose_run(
                 max_candidates=ctx.spec.replay.max_candidates,
                 economize=ctx.spec.replay.economize,
                 resume=True,
+                workers=ctx.spec.workers,
             )
             ctx.log_stage(stage, run_dir.name, "replay_done")
         if full_arms_keys and not (out / "replays_replay_full.json").is_file():
@@ -450,6 +451,7 @@ def diagnose_run(
                 only=full_arms_keys,
                 resume=True,
                 subdir="replay_full",
+                workers=ctx.spec.workers,
             )
     if not (out / "diagnoses.json").is_file():
         signal_failures(

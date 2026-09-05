@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Literal
 
@@ -301,6 +302,7 @@ class Replayer:
         economize: bool = True,
         resume: bool = False,
         subdir: str = "replay",
+        workers: int = 1,
     ) -> None:
         self._runner = runner
         self._spec = spec.model_copy(update={"arm": REPLAY_ARM, "keep_workspaces": True})
@@ -313,6 +315,9 @@ class Replayer:
         self.economize = economize
         self.resume = resume
         self.subdir = subdir
+        self.workers = max(1, workers)
+        """The k rollouts of one arm run concurrently (bounded); candidates stay sequential so
+        the economize decision keeps its order."""
         """``replay`` normally; E0 uses ``replay_full`` for the --full-arms headroom subset."""
 
     def _one(
@@ -392,19 +397,38 @@ class Replayer:
         payload: dict[str, Any],
         drift_reports: dict[str, JsonValue],
     ) -> ArmResult:
-        rollouts = [
-            self._one(
-                task,
-                key=key,
-                replicate=replicate,
-                candidate=candidate,
-                arm=arm,
-                index=i,
-                payload=payload,
-                drift_reports=drift_reports,
-            )
-            for i in range(1, self.k + 1)
-        ]
+        indices = range(1, self.k + 1)
+        if self.workers == 1:
+            rollouts = [
+                self._one(
+                    task,
+                    key=key,
+                    replicate=replicate,
+                    candidate=candidate,
+                    arm=arm,
+                    index=i,
+                    payload=payload,
+                    drift_reports=drift_reports,
+                )
+                for i in indices
+            ]
+        else:
+            with ThreadPoolExecutor(max_workers=min(self.workers, self.k)) as pool:
+                futures = {
+                    i: pool.submit(
+                        self._one,
+                        task,
+                        key=key,
+                        replicate=replicate,
+                        candidate=candidate,
+                        arm=arm,
+                        index=i,
+                        payload=payload,
+                        drift_reports=drift_reports,
+                    )
+                    for i in indices
+                }
+                rollouts = [futures[i].result() for i in indices]
         return ArmResult(
             arm=arm,
             k=self.k,

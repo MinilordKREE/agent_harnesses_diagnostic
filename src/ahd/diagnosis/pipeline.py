@@ -288,6 +288,7 @@ def replay_failures(
     only: Sequence[str] = (),
     resume: bool = False,
     subdir: str = "replay",
+    workers: int = 1,
 ) -> list[ReplayResult]:
     """``subdir`` = ``replay`` writes ``replays.json`` / ``failure_types.json``; any other
     name (E0's ``replay_full``) writes ``replays_<subdir>.json`` and leaves the main files."""
@@ -303,6 +304,7 @@ def replay_failures(
         economize=economize,
         resume=resume,
         subdir=subdir,
+        workers=workers,
     )
     results: list[ReplayResult] = []
     for record in load_alignments(run_dir):
