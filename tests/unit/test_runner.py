@@ -398,3 +398,83 @@ def test_invalid_snapshot_is_refused(
     ).model_copy(update={"budget": config.budget.model_copy(update={"max_steps": 10})})
     with pytest.raises(SnapshotInvalidError):
         harness.runner.run(spec, [taskset.by_id("bc-en-0001")], snapshot=seed_snapshot)
+
+
+def test_parallel_lanes_match_sequential(
+    harness: Harness, taskset: TaskSet, seed_snapshot: HarnessSnapshot, config: RunConfig
+) -> None:
+    ids = ("bc-en-0001", "gdpval-00000000-0000-0000-0000-000000000001")
+    spec = RunSpec.from_config(
+        config, harness_snapshot_id=seed_snapshot.snapshot_id, task_ids=ids, replicates=2, workers=3
+    )
+    w = harness.worker
+    for task_id in ids:
+        for rep in ("r1", "r2"):
+            w.scenarios[(task_id, rep, 1)] = finished("42", deliverable=True)
+    result = harness.runner.run(spec, [taskset.by_id(t) for t in ids], snapshot=seed_snapshot)
+    assert all(t.pass_hat_k for t in result.tasks)
+    records = [r for t in result.tasks for r in t.rollouts]
+    assert len(records) == 4 and len({r.rollout_uid for r in records}) == 4
+    for record in records:
+        marker = record.rollout_dir / "done.json"
+        assert marker.is_file() and (record.rollout_dir / "score.json").is_file()
+        assert json.loads(marker.read_text())["rollout_uid"] == record.rollout_uid
+    rows = read_ledger(harness.ledger.path)
+    assert {r.rollout_uid for r in rows if r.event == "policy"} == {r.rollout_uid for r in records}
+    summary = json.loads((harness.ctx.out_dir / "summary.json").read_text())
+    assert summary["ledger"]["policy_rollouts"] == 4
+    assert summary["per_source"]["gdpval"]["pass_hat_k_rate"] == 1.0
+
+
+def test_resume_reruns_only_unfinished_lanes(
+    harness: Harness,
+    taskset: TaskSet,
+    seed_snapshot: HarnessSnapshot,
+    config: RunConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ids = ("bc-en-0001", "gdpval-00000000-0000-0000-0000-000000000001")
+    spec = RunSpec.from_config(
+        config, harness_snapshot_id=seed_snapshot.snapshot_id, task_ids=ids, replicates=2, workers=2
+    )
+    w = harness.worker
+    for task_id in ids:
+        for rep in ("r1", "r2"):
+            w.scenarios[(task_id, rep, 1)] = finished("42", deliverable=True)
+    # Crash lane (gdpval, r2) after its ledger rows were written but before its done marker.
+    original_marker = Runner._write_done_marker
+
+    def crashing_marker(self: Runner, record: Any) -> None:
+        if record.task_id == ids[1] and record.replicate == "r2":
+            raise RuntimeError("simulated crash before done marker")
+        original_marker(self, record)
+
+    monkeypatch.setattr(Runner, "_write_done_marker", crashing_marker)
+    first = harness.runner.run(spec, [taskset.by_id(t) for t in ids], snapshot=seed_snapshot)
+    crashed = [r for t in first.tasks for r in t.rollouts if r.error_kind == "runner_exception"]
+    assert len(crashed) == 1 and crashed[0].replicate == "r2" and crashed[0].partial
+    assert not (crashed[0].rollout_dir / "done.json").exists()
+    assert (crashed[0].rollout_dir / "runner_exception.txt").exists()
+    first_summary = json.loads((harness.ctx.out_dir / "summary.json").read_text())
+    assert first_summary["ledger"]["policy_rollouts"] == 3  # the crashed lane's rows are excluded
+    requests_before = len(w.requests)
+
+    monkeypatch.setattr(Runner, "_write_done_marker", original_marker)
+    harness.score_calls.clear()
+    second = harness.runner.run(
+        spec, [taskset.by_id(t) for t in ids], snapshot=seed_snapshot, resume=True
+    )
+    assert len(w.requests) == requests_before + 1  # only the crashed lane ran again
+    assert w.requests[-1]["task"]["id"] == ids[1]
+    assert all(t.pass_hat_k for t in second.tasks) and all(t.infra == 0 for t in second.tasks)
+    assert [c[0] for c in harness.score_calls] == [
+        ids[1]
+    ]  # already-scored rollouts were not re-scored
+    second_summary = json.loads((harness.ctx.out_dir / "summary.json").read_text())
+    assert (
+        second_summary["ledger"]["policy_rollouts"] == 4
+    )  # the orphaned first-attempt row stays excluded
+    rows = read_ledger(harness.ledger.path)
+    assert sum(1 for r in rows if r.event == "policy") == 5  # 4 kept + 1 orphaned
+    events = read_trace(harness.ctx.out_dir / "trace.jsonl")
+    assert [e.kind for e in events].count("rollout_reused") == 3

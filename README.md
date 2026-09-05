@@ -70,7 +70,8 @@ uv run ahd tasks sample --n 20 --seed 0
 uv run ahd harness snapshot --from third_party/evo-bench/policy_harness_seed
 uv run ahd harness components <snapshot_id>
 uv run ahd harness diff <a> <b>
-uv run ahd run --harness <snapshot_id> --tasks claw-T007zh_todo_management --replicates 2 --mode normal
+uv run ahd run --harness <snapshot_id> --tasks claw-T007zh_todo_management --replicates 2 --mode normal --workers 4
+uv run ahd run resume <run_id> [--workers 4]
 uv run ahd run summarize <run_id>
 ```
 

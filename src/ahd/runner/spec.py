@@ -33,6 +33,7 @@ class RunSpec(StrictModel):
     reference_max_attempts: int = Field(default=5, ge=1)
     keep_workspaces: bool = False
     arm: str = "seed"
+    workers: int = Field(default=1, ge=1)
 
     @classmethod
     def from_config(
@@ -44,6 +45,7 @@ class RunSpec(StrictModel):
         mode: RunMode | None = None,
         replicates: int | None = None,
         arm: str | None = None,
+        workers: int | None = None,
     ) -> RunSpec:
         if config.tasks is None:
             raise ConfigError("run config has no `tasks` section")
@@ -60,6 +62,7 @@ class RunSpec(StrictModel):
             reference_max_attempts=config.run.reference_max_attempts,
             keep_workspaces=config.run.keep_workspaces,
             arm=arm or config.run.arm,
+            workers=workers or config.run.workers,
         )
 
     def manifest_view(self) -> dict[str, JsonValue]:

@@ -126,7 +126,8 @@ licensed repository, that one is cited instead.
   seed, model, prompt_tokens, completion_tokens, cache_hit_prompt_tokens, reasoning_tokens,
   cached, latency_ms, usd, pricing_version, pricing_tier, attempt, status_code, error_kind,
   error, request_sha256.
-- Event kinds: `call`, `policy`, `infra_retry`, `infra_failure`, `task_failure`, `search`. `summarize()`
+- Event kinds: `call`, `policy`, `infra_retry`, `infra_failure`, `task_failure`, `search`; every
+  runner-written row carries `rollout_uid` (v4). `summarize()`
   counts infra and task events separately and never adds them together. `search` rows are
   one per web-search provider call, priced per query from the `search` section of
   `configs/pricing.yaml` (own `pricing_version`); their spend is reported as `search_usd`
@@ -209,6 +210,16 @@ never a 0.
   after all replicates of a task have run.
 - `mock_today` is injected into a Claw task's `claw_public` only when the task's own value is
   null; the run date is in the manifest either way.
+- **Parallelism and resume (M2.1).** A lane is one (task, replicate); up to `workers` lanes run
+  concurrently (each is one worker subprocess plus its mock services). Every finished attempt
+  writes `done.json` with its `RolloutRecord` and a `rollout_uid`; every ledger row of that
+  attempt carries the same `rollout_uid` (ledger v4). `ahd run resume <run_id>` reloads the
+  manifest's `run_spec` and snapshot, reuses attempts that have a marker, deletes and re-runs
+  attempts without one, and skips scoring where `score.json` exists. Ledger rows whose
+  `rollout_uid` never reached a marker stay in the file but are excluded from `summary.json`.
+  A Python exception inside a lane is recorded as an `infra` rollout with
+  `error_kind: runner_exception` and `runner_exception.txt`, leaves no marker, and does not
+  stop the other lanes.
 
 ## Run directory
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -175,3 +176,108 @@ def test_run_summarize_reads_summary(tmp_path: Path, capsys: pytest.CaptureFixtu
         cli.main(["run", "summarize", "nope", "--runs-root", str(tmp_path / "runs")])
         == cli.EXIT_INFRA
     )
+
+
+def test_run_start_and_resume_cli(
+    git_repo: Path,
+    fake_snapshot: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from ahd.runner import runner as runner_module
+    from ahd.runner.worker import WorkerOutcome
+    from ahd.tasks import scorer as scorer_module
+    from ahd.tasks.evobench import EvoBenchLoader
+    from tests.evobench_fixtures import FAKE_REVISION
+    from tests.runner_fixtures import fake_trajectory, write_rollout_files
+
+    seed = REPO_ROOT / "third_party" / "evo-bench" / "policy_harness_seed"
+    if not (seed / "harness.py").is_file():
+        pytest.skip("submodule not checked out")
+    monkeypatch.chdir(git_repo)
+    config_path = _write_config(git_repo)
+    text = config_path.read_text(encoding="utf-8").replace(
+        "  sources: [browsecomp, hle, gdpval, claw_eval]   # apex is loaded but excluded\n",
+        "  sources: [browsecomp]\n",
+    )
+    config_path.write_text(text, encoding="utf-8")
+    monkeypatch.setattr(
+        cli,
+        "EvoBenchLoader",
+        lambda **kw: EvoBenchLoader(revision=FAKE_REVISION, snapshot_dir=fake_snapshot),
+    )
+    monkeypatch.setattr(cli, "make_transport", lambda settings, config: FakeTransport([]))
+    monkeypatch.setattr(
+        cli, "load_settings", lambda: Settings.model_validate({"deepseek_api_key": "x"})
+    )
+    monkeypatch.setattr(
+        scorer_module,
+        "score_task",
+        lambda task, workspace, final_answer, judge_client=None: {
+            "passed": True,
+            "score": 1.0,
+            "reason": "llm_as_judge: ok",
+        },
+    )
+    calls: list[str] = []
+
+    def fake_invoke(
+        *,
+        request: dict[str, Any],
+        rollout_dir: Path,
+        env: dict[str, str],
+        timeout_s: int,
+        python: str | None = None,
+    ) -> WorkerOutcome:
+        calls.append(rollout_dir.name)
+        if len(calls) == 2:
+            raise RuntimeError("boom")  # second lane crashes on the first run
+        trajectory, metadata = fake_trajectory(commands=["ls"], final_answer="42")
+        write_rollout_files(rollout_dir, trajectory, metadata)
+        return WorkerOutcome(
+            ok=True,
+            rollout={},
+            error=None,
+            error_type=None,
+            returncode=0,
+            timed_out=False,
+            elapsed_seconds=1.0,
+            stdout_tail="",
+            stderr_tail="",
+        )
+
+    monkeypatch.setattr(runner_module, "invoke_worker", fake_invoke)
+    manifest_path = REPO_ROOT / "configs" / "harness" / "seed_components.yaml"
+    assert (
+        cli.main(
+            [
+                "run",
+                "--config",
+                str(config_path),
+                "--harness",
+                str(seed),
+                "--manifest",
+                str(manifest_path),
+                "--tasks",
+                "bc-en-0001",
+                "--replicates",
+                "2",
+                "--workers",
+                "1",
+                "--run-id",
+                "cli-run",
+            ]
+        )
+        == 0
+    )
+    out = capsys.readouterr().out
+    assert "failures: 1" in out
+    manifest = json.loads((git_repo / "runs" / "cli-run" / "manifest.json").read_text())
+    assert manifest["run_spec"]["workers"] == 1 and manifest["harness_snapshot_id"]
+    assert (
+        cli.main(["run", "resume", "cli-run", "--config", str(config_path), "--workers", "2"]) == 0
+    )
+    assert "failures: 0" in capsys.readouterr().out
+    assert calls == ["r1", "r2", "r2"]
+    summary = json.loads((git_repo / "runs" / "cli-run" / "summary.json").read_text())
+    assert summary["tasks"][0]["pass_hat_k"] is True

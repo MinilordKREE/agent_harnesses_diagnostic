@@ -22,8 +22,10 @@ GDPval rubric judge catches it and retries text-only, recording
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import importlib
 import logging
+import threading
 from collections.abc import Iterator
 from typing import Any
 
@@ -209,12 +211,33 @@ class OpenAIShim:
         self.chat = _Chat(judge)
 
 
+_current_judge: contextvars.ContextVar[AhdJudgeClient | None] = contextvars.ContextVar(
+    "ahd_claw_judge", default=None
+)
+_patch_lock = threading.Lock()
+_patch_depth = 0
+_patch_original: Any = None
+
+
+def _factory(**kwargs: Any) -> OpenAIShim:
+    judge = _current_judge.get()
+    if judge is None:
+        raise InfraError(
+            "Claw-Eval judge constructed outside patched_claw_judge", kind="judge_unbound"
+        )
+    return OpenAIShim(judge, **kwargs)
+
+
 @contextlib.contextmanager
 def patched_claw_judge(judge: AhdJudgeClient) -> Iterator[None]:
     """Route Claw-Eval's ``LLMJudge`` through ``judge`` by replacing one module attribute.
 
     Patch point: ``claw_eval.graders.llm_judge.OpenAI`` (the name ``LLMJudge.__init__`` calls).
+    Thread-safe (M2.1): the module attribute is installed once and refcounted, and the judge
+    bound to the calling thread lives in a context variable, so concurrent scorings of
+    different tasks each reach their own judge.
     """
+    global _patch_depth, _patch_original
     try:
         module = importlib.import_module(CLAW_JUDGE_MODULE)
     except ImportError as exc:
@@ -223,14 +246,19 @@ def patched_claw_judge(judge: AhdJudgeClient) -> Iterator[None]:
             "scripts/setup_claw_eval.sh)",
             kind="claw_eval_missing",
         ) from exc
-    original = getattr(module, CLAW_PATCH_TARGET)
-
-    def factory(**kwargs: Any) -> OpenAIShim:
-        return OpenAIShim(judge, **kwargs)
-
-    setattr(module, CLAW_PATCH_TARGET, factory)
-    logger.debug("patched %s.%s", CLAW_JUDGE_MODULE, CLAW_PATCH_TARGET)
+    with _patch_lock:
+        if _patch_depth == 0:
+            _patch_original = getattr(module, CLAW_PATCH_TARGET)
+            setattr(module, CLAW_PATCH_TARGET, _factory)
+            logger.debug("patched %s.%s", CLAW_JUDGE_MODULE, CLAW_PATCH_TARGET)
+        _patch_depth += 1
+    token = _current_judge.set(judge)
     try:
         yield
     finally:
-        setattr(module, CLAW_PATCH_TARGET, original)
+        _current_judge.reset(token)
+        with _patch_lock:
+            _patch_depth -= 1
+            if _patch_depth == 0:
+                setattr(module, CLAW_PATCH_TARGET, _patch_original)
+                _patch_original = None

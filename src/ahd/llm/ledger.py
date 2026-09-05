@@ -23,6 +23,7 @@ part of the estimand and must stay visible as its own column.
 
 from __future__ import annotations
 
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -35,7 +36,7 @@ from ahd.errors import InfraError, TaskFailure
 from ahd.llm.pricing import CostBreakdown, PricingTier, SearchCost
 from ahd.llm.types import ChatRequest, ChatResponse, Usage
 
-LEDGER_SCHEMA_VERSION = 3
+LEDGER_SCHEMA_VERSION = 4
 LEDGER_FILENAME = "ledger.jsonl"
 
 type LedgerEvent = Literal[
@@ -71,6 +72,9 @@ class LedgerRow(StrictModel):
     replicate: str | None = None
     steps: int | None = None
     approximate: bool = False
+    rollout_uid: str | None = None
+    """v4 (M2.1): the attempt this row belongs to; rows whose attempt never reached its done
+    marker are excluded from run summaries after a resume."""
 
 
 BUDGET_EXHAUSTED_KIND = "budget_exhausted"
@@ -106,9 +110,11 @@ class Ledger:
     def __init__(self, path: Path, run_id: str) -> None:
         self.path = path
         self.run_id = run_id
+        self._lock = threading.Lock()
 
     def append(self, row: LedgerRow) -> None:
-        append_jsonl(self.path, row.model_dump(mode="json"))
+        with self._lock:
+            append_jsonl(self.path, row.model_dump(mode="json"))
 
     def _fields(
         self, *, event: LedgerEvent, arm: str, unit_id: str, seed: int, model: str
@@ -221,6 +227,7 @@ class Ledger:
         model: str,
         exc: TaskFailure,
         request_sha256: str | None = None,
+        rollout_uid: str | None = None,
     ) -> LedgerRow:
         """A task-level failure not tied to one chat request (for example a scorer verdict)."""
         row = LedgerRow.model_validate(
@@ -231,6 +238,7 @@ class Ledger:
                 "error_kind": exc.kind,
                 "error": str(exc),
                 "request_sha256": request_sha256,
+                "rollout_uid": rollout_uid,
             }
         )
         self.append(row)
@@ -245,6 +253,7 @@ class Ledger:
         model: str,
         exc: InfraError,
         request_sha256: str | None = None,
+        rollout_uid: str | None = None,
     ) -> LedgerRow:
         """An infrastructure failure not tied to one chat request (missing resource, grader)."""
         row = LedgerRow.model_validate(
@@ -257,6 +266,7 @@ class Ledger:
                 "error_kind": exc.kind,
                 "error": str(exc),
                 "request_sha256": request_sha256,
+                "rollout_uid": rollout_uid,
             }
         )
         self.append(row)
@@ -273,6 +283,7 @@ class Ledger:
         latency_ms: int = 0,
         replicate: str | None = None,
         approximate: bool = False,
+        rollout_uid: str | None = None,
     ) -> LedgerRow:
         """One web-search provider call, priced per query from ``pricing.yaml``.
 
@@ -291,6 +302,7 @@ class Ledger:
                 "search_query_sha256": query_sha256,
                 "replicate": replicate,
                 "approximate": approximate,
+                "rollout_uid": rollout_uid,
             }
         )
         self.append(row)
@@ -309,6 +321,7 @@ class Ledger:
         steps: int,
         latency_ms: int,
         request_sha256: str | None = None,
+        rollout_uid: str | None = None,
     ) -> LedgerRow:
         """One policy rollout: tokens summed from per-step usage, priced at the start tier."""
         row = LedgerRow.model_validate(
@@ -325,6 +338,7 @@ class Ledger:
                 "replicate": replicate,
                 "steps": steps,
                 "request_sha256": request_sha256,
+                "rollout_uid": rollout_uid,
             }
         )
         self.append(row)

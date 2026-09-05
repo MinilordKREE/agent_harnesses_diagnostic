@@ -13,21 +13,28 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+import yaml
+
 from ahd import __version__
 from ahd.core.config import RunConfig, load_run_config
 from ahd.core.context import RunContext, create_run_context, git_state, new_run_id
 from ahd.core.environment import probe_environment
 from ahd.core.hashing import JsonValue
-from ahd.core.manifest import write_manifest
+from ahd.core.manifest import RESOLVED_CONFIG_FILENAME, load_run_context, write_manifest
 from ahd.core.trace import TRACE_FILENAME, TraceWriter
 from ahd.errors import ConfigError, InfraError, TaskFailure
 from ahd.harness.components import ComponentManifest
-from ahd.harness.snapshot import SnapshotStore, diff_snapshots, snapshot_from_dir
+from ahd.harness.snapshot import (
+    HarnessSnapshot,
+    SnapshotStore,
+    diff_snapshots,
+    snapshot_from_dir,
+)
 from ahd.harness.validate import validate_tree
 from ahd.llm.cache import ResponseCache
 from ahd.llm.deepseek import PROVIDER_NAME, DeepSeekClient, Transport, make_openai_transport
 from ahd.llm.ledger import LEDGER_FILENAME, Ledger, read_ledger
-from ahd.llm.pricing import load_pricing
+from ahd.llm.pricing import PricingTable, load_pricing
 from ahd.llm.types import Attribution, ChatMessage, ChatRequest
 from ahd.logs import configure_logging
 from ahd.runner.runner import Runner
@@ -351,6 +358,7 @@ def cmd_run_start(args: argparse.Namespace) -> int:
         mode=args.mode,
         replicates=args.replicates,
         arm=args.arm,
+        workers=args.workers,
     )
     ctx = _start_run(
         config,
@@ -360,10 +368,23 @@ def cmd_run_start(args: argparse.Namespace) -> int:
         harness_snapshot_id=snapshot.snapshot_id,
         run_spec=spec.manifest_view(),
     )
+    return _execute_run(ctx, config, settings, pricing, spec, snapshot, resume=False)
+
+
+def _execute_run(
+    ctx: RunContext,
+    config: RunConfig,
+    settings: Settings,
+    pricing: PricingTable,
+    spec: RunSpec,
+    snapshot: HarnessSnapshot,
+    *,
+    resume: bool,
+) -> int:
     assert config.tasks is not None
     loader = EvoBenchLoader(dataset_id=config.tasks.dataset_id, revision=config.tasks.revision)
     taskset = loader.load(config.tasks.split)
-    tasks = [taskset.by_id(task_id) for task_id in task_ids]
+    tasks = [taskset.by_id(task_id) for task_id in spec.task_ids]
     ledger = Ledger(ctx.out_dir / LEDGER_FILENAME, ctx.run_id)
     judge = AhdJudgeClient(
         DeepSeekClient(
@@ -390,13 +411,40 @@ def cmd_run_start(args: argparse.Namespace) -> int:
             trace=trace,
             claw_repo=claw_repo,
         )
-        result = runner.run(spec, tasks, snapshot=snapshot)
+        result = runner.run(spec, tasks, snapshot=snapshot, resume=resume)
     print(f"run_id:    {ctx.run_id}")
     print(f"out_dir:   {ctx.out_dir}")
     print(f"snapshot:  {result.harness_snapshot_id}")
     print(f"tasks:     {len(result.tasks)}  failures: {len(result.failures)}")
     print(f"summary:   {result.summary_path}")
     return EXIT_OK
+
+
+def cmd_run_resume(args: argparse.Namespace) -> int:
+    runs_root = (
+        args.runs_root if args.runs_root is not None else load_run_config(args.config).runs_root
+    )
+    run_dir = Path(runs_root) / args.run_id
+    ctx, manifest = load_run_context(run_dir)
+    if manifest.run_spec is None or manifest.harness_snapshot_id is None:
+        raise ConfigError(f"run {args.run_id} has no run_spec in its manifest; nothing to resume")
+    try:
+        config = RunConfig.model_validate(
+            yaml.safe_load((run_dir / RESOLVED_CONFIG_FILENAME).read_text(encoding="utf-8"))
+        )
+    except (OSError, yaml.YAMLError) as exc:
+        raise InfraError(
+            f"cannot read resolved config for {args.run_id}: {exc}", kind="missing_file"
+        ) from exc
+    spec = RunSpec.model_validate(manifest.run_spec)
+    if args.workers is not None:
+        spec = spec.model_copy(update={"workers": args.workers})
+    snapshot = SnapshotStore(run_dir / "harness").load(manifest.harness_snapshot_id)
+    settings = load_settings()
+    pricing = load_pricing(config.pricing_path)
+    configure_logging(json_path=ctx.out_dir / LOG_FILENAME)
+    logging.getLogger(__name__).info("run resumed", extra={"run_id": ctx.run_id})
+    return _execute_run(ctx, config, settings, pricing, spec, snapshot, resume=True)
 
 
 def cmd_run_summarize(args: argparse.Namespace) -> int:
@@ -509,7 +557,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_start.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     p_start.add_argument("--run-id", default=None)
     p_start.add_argument("--runs-root", type=Path, default=None)
+    p_start.add_argument(
+        "--workers", type=int, default=None, help="concurrent (task, replicate) lanes"
+    )
     p_start.set_defaults(func=cmd_run_start)
+    p_resume = run_sub.add_parser("resume", help="finish an interrupted run in place")
+    p_resume.add_argument("run_id")
+    p_resume.add_argument("--config", type=Path, default=Path("configs/runs/example.yaml"))
+    p_resume.add_argument("--runs-root", type=Path, default=None)
+    p_resume.add_argument("--workers", type=int, default=None)
+    p_resume.set_defaults(func=cmd_run_resume)
     p_sum = run_sub.add_parser("summarize", help="print summary.json of a run")
     p_sum.add_argument("run_id")
     p_sum.add_argument("--config", type=Path, default=Path("configs/runs/example.yaml"))

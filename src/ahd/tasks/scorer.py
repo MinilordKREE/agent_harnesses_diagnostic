@@ -22,6 +22,7 @@ import hashlib
 import logging
 import os
 import re
+import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -215,6 +216,9 @@ def artifact_sha256(artifacts: Artifacts) -> str:
 
 
 CLAW_REPO_ENV = "EVOBENCH_CLAW_REPO"
+_env_lock = threading.Lock()
+_env_depth = 0
+_env_previous: str | None = None
 
 
 @contextlib.contextmanager
@@ -223,20 +227,28 @@ def claw_repo_env(claw_repo: Path | None) -> Iterator[None]:
 
     ``evobench.evaluation.scorer._claw_grader`` resolves ``task_dir`` through
     ``claw_runtime.claw_repo_root()``, which reads ``EVOBENCH_CLAW_REPO`` from the *process*
-    environment (default ``/opt/claw-eval``); the variable is set here and restored after.
+    environment (default ``/opt/claw-eval``). The variable is set on first entry and restored
+    when the last concurrent scoring leaves (refcounted; M2.1 runs scorings in threads).
     """
+    global _env_depth, _env_previous
     if claw_repo is None:
         yield
         return
-    previous = os.environ.get(CLAW_REPO_ENV)
-    os.environ[CLAW_REPO_ENV] = str(claw_repo)
+    with _env_lock:
+        if _env_depth == 0:
+            _env_previous = os.environ.get(CLAW_REPO_ENV)
+            os.environ[CLAW_REPO_ENV] = str(claw_repo)
+        _env_depth += 1
     try:
         yield
     finally:
-        if previous is None:
-            os.environ.pop(CLAW_REPO_ENV, None)
-        else:
-            os.environ[CLAW_REPO_ENV] = previous
+        with _env_lock:
+            _env_depth -= 1
+            if _env_depth == 0:
+                if _env_previous is None:
+                    os.environ.pop(CLAW_REPO_ENV, None)
+                else:
+                    os.environ[CLAW_REPO_ENV] = _env_previous
 
 
 class Scorer:

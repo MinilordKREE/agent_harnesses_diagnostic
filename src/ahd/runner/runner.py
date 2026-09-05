@@ -1,4 +1,4 @@
-"""Runner: one rollout at a time through Evo-Bench's worker, everything recorded for ahd.
+"""Runner: rollouts through Evo-Bench's worker in bounded parallel lanes, resumable.
 
 No reference source: written fresh for ahd (see docs/reuse/M2.md). Uses Evo-Bench's
 ``prepare_task_workspace`` (Apache-2.0, imported) and drives ``evobench.policy.worker`` the
@@ -6,30 +6,43 @@ way ``adapter._run_task_local`` does. The harness tree is never modified: refere
 appends a block to the public prompt, and the study-wide ``mock_today`` is injected into
 ``claw_public`` of the task dict, both runner-side.
 
+M2.1: a *lane* is one (task, replicate); lanes run concurrently up to ``spec.workers``
+(each lane is one worker subprocess plus its mock services). Every finished attempt writes
+``done.json`` (its ``RolloutRecord``); ``run(..., resume=True)`` loads finished attempts
+from their markers, re-runs unfinished ones, and skips scoring where ``score.json`` exists.
+Ledger rows carry ``rollout_uid`` so a resumed run's summary ignores rows from attempts that
+never reached their marker.
+
 Per rollout under ``rollouts/<task>/<replicate>[/attempt_N]/``: Evo-Bench's own files
 (``trajectory.json``, ``metadata.json``, ``rollout.log``, worker I/O, Claw trace files) plus
-``trajectory.jsonl`` (M0 envelope), ``artifacts/`` (the workspace ``outputs/``), ``score.json``
-and ``failure.json``. Scores for normal mode are written only after all replicates of a task
-finished (audit h caveat); reference mode scores each attempt because the loop stops at the
-first pass.
+``trajectory.jsonl`` (M0 envelope), ``artifacts/`` (the workspace ``outputs/``), ``done.json``,
+``score.json`` and ``failure.json``. Scores for normal mode are written only after all
+replicates of a task finished; reference mode scores each attempt because the loop stops at
+the first pass.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
+import traceback
+import uuid
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
+
+from pydantic import ValidationError
 
 from ahd.core.config import RunConfig
 from ahd.core.context import RunContext
 from ahd.core.hashing import JsonValue, sha256_of, to_json_value
 from ahd.core.io import atomic_write_text, read_json
 from ahd.core.trace import TraceWriter
-from ahd.errors import BudgetExhausted, ConfigError, InfraError, TaskFailure
+from ahd.errors import BudgetExhausted, ConfigError, InfraError
 from ahd.harness.snapshot import HarnessSnapshot, SnapshotStore, copy_snapshot
 from ahd.harness.validate import require_valid
 from ahd.llm.ledger import Ledger, read_ledger
@@ -46,7 +59,7 @@ from ahd.runner.records import (
 from ahd.runner.reference import load_template, render_reference_block, with_reference
 from ahd.runner.serper import count_serper_calls
 from ahd.runner.spec import RunSpec
-from ahd.runner.summary import aggregate_task, final_attempts, summarize_run
+from ahd.runner.summary import aggregate_task, summarize_run
 from ahd.runner.trajectory import (
     TrajectoryEvent,
     events_from_rollout_log,
@@ -56,7 +69,7 @@ from ahd.runner.trajectory import (
 )
 from ahd.runner.worker import WorkerOutcome, build_request, invoke_worker
 from ahd.settings import Settings
-from ahd.tasks.models import Artifacts, Task
+from ahd.tasks.models import Artifacts, Score, Task
 from ahd.tasks.scorer import Scorer
 
 logger = logging.getLogger(__name__)
@@ -66,6 +79,15 @@ INFRA_EXIT_REASONS: frozenset[str] = frozenset({"model_call_error"})
 ROLLOUTS_DIRNAME = "rollouts"
 WORKSPACES_DIRNAME = "workspaces"
 HARNESS_DIRNAME = "harness"
+DONE_FILENAME = "done.json"
+SCORE_FILENAME = "score.json"
+
+
+class _Attribution(TypedDict):
+    arm: str
+    unit_id: str
+    seed: int
+    model: str
 
 
 class Runner:
@@ -96,7 +118,14 @@ class Runner:
 
     # ---------------------------------------------------------------- public
 
-    def run(self, spec: RunSpec, tasks: Sequence[Task], *, snapshot: HarnessSnapshot) -> RunResult:
+    def run(
+        self,
+        spec: RunSpec,
+        tasks: Sequence[Task],
+        *,
+        snapshot: HarnessSnapshot,
+        resume: bool = False,
+    ) -> RunResult:
         require_valid(snapshot.tree, budget=spec.budget)
         run_store = SnapshotStore(self._ctx.out_dir / HARNESS_DIRNAME)
         local = copy_snapshot(snapshot, run_store)
@@ -110,47 +139,41 @@ class Runner:
         template = self._reference_template
         if spec.mode == "reference" and template is None:
             template = load_template()
-        self._trace.write("run_spec", spec.manifest_view())
+        self._trace.write(
+            "run_resumed" if resume else "run_spec",
+            {**spec.manifest_view(), "resume": resume},
+        )
+
+        lanes = [(task, replicate) for task in tasks for replicate in spec.replicate_ids]
+        by_task: dict[str, list[RolloutRecord]] = {task.id: [] for task in tasks}
+        references: list[ReferenceRecord] = []
+        with ThreadPoolExecutor(max_workers=spec.workers) as pool:
+            futures = {
+                pool.submit(self._run_lane, task, replicate, spec, local, template, resume): (
+                    task,
+                    replicate,
+                )
+                for task, replicate in lanes
+            }
+            for future in as_completed(futures):
+                task, _replicate = futures[future]
+                records, reference = future.result()
+                by_task[task.id].extend(records)
+                if reference is not None:
+                    references.append(reference)
+            if spec.mode == "normal":
+                scoring = {
+                    pool.submit(self._score_task, task, by_task[task.id], resume): task
+                    for task in tasks
+                }
+                for score_future in as_completed(scoring):
+                    scored_task = scoring[score_future]
+                    by_task[scored_task.id] = score_future.result()
 
         results: list[TaskResult] = []
         failures: list[FailureRecord] = []
-        references: list[ReferenceRecord] = []
         for task in tasks:
-            rollouts: list[RolloutRecord] = []
-            if spec.mode == "normal":
-                for replicate in spec.replicate_ids:
-                    rollouts.append(self._rollout(task, replicate, 1, spec=spec, snapshot=local))
-                rollouts = [self._score(task, r) for r in rollouts]
-            else:
-                assert template is not None
-                block = render_reference_block(task, template=template, claw_repo=self._claw_repo)
-                for replicate in spec.replicate_ids:
-                    passing: int | None = None
-                    attempts = 0
-                    for attempt in range(1, spec.reference_max_attempts + 1):
-                        attempts = attempt
-                        record = self._rollout(
-                            task,
-                            replicate,
-                            attempt,
-                            spec=spec,
-                            snapshot=local,
-                            reference_block=block,
-                        )
-                        record = self._score(task, record)
-                        rollouts.append(record)
-                        if record.score is not None and record.score.passed:
-                            passing = attempt
-                            break
-                    references.append(
-                        ReferenceRecord(
-                            task_id=task.id,
-                            replicate=replicate,
-                            attempts=attempts,
-                            max_attempts=spec.reference_max_attempts,
-                            passing_attempt=passing,
-                        )
-                    )
+            rollouts = sorted(by_task[task.id], key=lambda r: (r.replicate, r.attempt))
             result = aggregate_task(task, rollouts, k=len(spec.replicate_ids))
             results.append(result)
             failures.extend(self._failures(task, rollouts, spec=spec))
@@ -167,14 +190,18 @@ class Runner:
                     "budget": result.budget,
                 },
             )
+        references.sort(key=lambda r: (r.task_id, r.replicate))
 
+        done_uids = {r.rollout_uid for rollouts in by_task.values() for r in rollouts}
         ledger_rows = read_ledger(self._ledger.path) if self._ledger.path.exists() else []
         summary = summarize_run(
             run_id=self._ctx.run_id,
             harness_snapshot_id=local.snapshot_id,
             mode=spec.mode,
             tasks=results,
-            ledger_rows=ledger_rows,
+            ledger_rows=[
+                r for r in ledger_rows if r.rollout_uid is None or r.rollout_uid in done_uids
+            ],
         )
         summary_path = self._ctx.out_dir / "summary.json"
         atomic_write_text(summary_path, _dumps(summary))
@@ -195,6 +222,130 @@ class Runner:
             failures=tuple(failures),
             references=tuple(references),
             summary_path=summary_path,
+        )
+
+    # ---------------------------------------------------------------- lanes
+
+    def _run_lane(
+        self,
+        task: Task,
+        replicate: str,
+        spec: RunSpec,
+        snapshot: HarnessSnapshot,
+        template: str | None,
+        resume: bool,
+    ) -> tuple[list[RolloutRecord], ReferenceRecord | None]:
+        """All attempts of one (task, replicate); never raises (a crash becomes an infra record)."""
+        try:
+            if spec.mode == "normal":
+                return [
+                    self._attempt(task, replicate, 1, spec=spec, snapshot=snapshot, resume=resume)
+                ], None
+            assert template is not None
+            block = render_reference_block(task, template=template, claw_repo=self._claw_repo)
+            records: list[RolloutRecord] = []
+            passing: int | None = None
+            attempts = 0
+            for attempt in range(1, spec.reference_max_attempts + 1):
+                attempts = attempt
+                record = self._attempt(
+                    task,
+                    replicate,
+                    attempt,
+                    spec=spec,
+                    snapshot=snapshot,
+                    resume=resume,
+                    reference_block=block,
+                )
+                record = self._score(task, record, resume=resume)
+                records.append(record)
+                if record.score is not None and record.score.passed:
+                    passing = attempt
+                    break
+            return records, ReferenceRecord(
+                task_id=task.id,
+                replicate=replicate,
+                attempts=attempts,
+                max_attempts=spec.reference_max_attempts,
+                passing_attempt=passing,
+            )
+        except Exception as exc:
+            logger.error(
+                "lane crashed",
+                extra={"task_id": task.id, "replicate": replicate, "error": str(exc)},
+            )
+            rollout_dir = self._rollout_dir(task, replicate, 1)
+            rollout_dir.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(rollout_dir / "runner_exception.txt", traceback.format_exc())
+            crashed = RolloutRecord(
+                rollout_uid=uuid.uuid4().hex[:12],
+                task_id=task.id,
+                source_benchmark=task.source_benchmark,
+                replicate=replicate,
+                attempt=1,
+                mode=spec.mode,
+                rollout_id=None,
+                rollout_dir=rollout_dir,
+                workspace_dir=self._ctx.out_dir / WORKSPACES_DIRNAME / task.id / replicate,
+                final_answer="",
+                exit_reason=None,
+                steps=0,
+                duration_seconds=0.0,
+                started_at=datetime.now(UTC).isoformat(),
+                usage=None,
+                usd=None,
+                pricing_tier=None,
+                partial=True,
+                error_family="infra",
+                error_kind="runner_exception",
+                error=f"{type(exc).__name__}: {exc}",
+                score=None,
+                serper_calls_approx=0,
+                reasoning_steps=0,
+            )
+            return [crashed], None
+
+    def _rollout_dir(self, task: Task, replicate: str, attempt: int) -> Path:
+        suffix = "" if attempt == 1 else f"/attempt_{attempt}"
+        return self._ctx.out_dir / ROLLOUTS_DIRNAME / task.id / f"{replicate}{suffix}"
+
+    def _attempt(
+        self,
+        task: Task,
+        replicate: str,
+        attempt: int,
+        *,
+        spec: RunSpec,
+        snapshot: HarnessSnapshot,
+        resume: bool,
+        reference_block: str | None = None,
+    ) -> RolloutRecord:
+        rollout_dir = self._rollout_dir(task, replicate, attempt)
+        marker = rollout_dir / DONE_FILENAME
+        if resume and marker.is_file():
+            record = _load_record(marker)
+            self._trace.write(
+                "rollout_reused", {"task_id": task.id, "replicate": replicate, "attempt": attempt}
+            )
+            return record
+        if rollout_dir.exists():
+            shutil.rmtree(rollout_dir)  # an unfinished attempt: start over
+        record = self._rollout(
+            task,
+            replicate,
+            attempt,
+            spec=spec,
+            snapshot=snapshot,
+            rollout_dir=rollout_dir,
+            reference_block=reference_block,
+        )
+        self._write_done_marker(record)
+        return record
+
+    def _write_done_marker(self, record: RolloutRecord) -> None:
+        atomic_write_text(
+            record.rollout_dir / DONE_FILENAME,
+            record.model_copy(update={"score": None}).model_dump_json(indent=2) + "\n",
         )
 
     # ---------------------------------------------------------------- rollout
@@ -235,12 +386,12 @@ class Runner:
         *,
         spec: RunSpec,
         snapshot: HarnessSnapshot,
+        rollout_dir: Path,
         reference_block: str | None = None,
     ) -> RolloutRecord:
         from evobench.evaluation.tasks import prepare_task_workspace
 
         suffix = "" if attempt == 1 else f"/attempt_{attempt}"
-        rollout_dir = self._ctx.out_dir / ROLLOUTS_DIRNAME / task.id / f"{replicate}{suffix}"
         workspace = Path(
             prepare_task_workspace(
                 {**task.to_evobench_dict(), "id": f"{task.id}/{replicate}{suffix}"},
@@ -257,8 +408,10 @@ class Runner:
             model_config_id=spec.policy.model,
             model_config=spec.policy.to_evobench_dict(),
         )
+        rollout_uid = uuid.uuid4().hex[:12]
         started_at = datetime.now(UTC)
         context: dict[str, JsonValue] = {
+            "rollout_uid": rollout_uid,
             "task_id": task.id,
             "source_benchmark": task.source_benchmark,
             "replicate": replicate,
@@ -289,6 +442,7 @@ class Runner:
             outcome=outcome,
             started_at=started_at,
             context=context,
+            rollout_uid=rollout_uid,
         )
 
     def _record(
@@ -303,6 +457,7 @@ class Runner:
         outcome: WorkerOutcome,
         started_at: datetime,
         context: dict[str, JsonValue],
+        rollout_uid: str,
     ) -> RolloutRecord:
         events: list[TrajectoryEvent]
         partial = False
@@ -315,6 +470,12 @@ class Runner:
         metadata: dict[str, Any] = {}
         trajectory_path = rollout_dir / "trajectory.json"
         metadata_path = rollout_dir / "metadata.json"
+        common: _Attribution = {
+            "arm": spec.arm,
+            "unit_id": task.id,
+            "seed": self._ctx.seed,
+            "model": spec.policy.model,
+        }
         if outcome.ok and trajectory_path.is_file() and metadata_path.is_file():
             trajectory = read_json(trajectory_path)
             metadata = read_json(metadata_path)
@@ -346,11 +507,7 @@ class Runner:
                 ),
             )
             self._ledger.record_infra_failure_event(
-                arm=spec.arm,
-                unit_id=task.id,
-                seed=self._ctx.seed,
-                model=spec.policy.model,
-                exc=InfraError(error, kind=error_kind),
+                **common, exc=InfraError(error, kind=error_kind), rollout_uid=rollout_uid
             )
 
         step_usage = usage_from_events(events)
@@ -361,21 +518,12 @@ class Runner:
                 reconcile_usage(step_usage.usage, metadata.get("token_usage", {}))
             except InfraError as exc:
                 error_family, error_kind, error = "infra", exc.kind, str(exc)
-                self._ledger.record_infra_failure_event(
-                    arm=spec.arm,
-                    unit_id=task.id,
-                    seed=self._ctx.seed,
-                    model=spec.policy.model,
-                    exc=exc,
-                )
+                self._ledger.record_infra_failure_event(**common, exc=exc, rollout_uid=rollout_uid)
         if step_usage.steps > 0:
             cost = self._pricing.cost(spec.policy.model, step_usage.usage, started_at)
             usd, tier = cost.usd, cost.tier
             self._ledger.record_policy_rollout(
-                arm=spec.arm,
-                unit_id=task.id,
-                seed=self._ctx.seed,
-                model=spec.policy.model,
+                **common,
                 replicate=replicate,
                 usage=step_usage.usage,
                 cost=cost,
@@ -386,6 +534,7 @@ class Runner:
                 request_sha256=sha256_of(
                     {"task": task.id, "replicate": replicate, "attempt": attempt}
                 ),
+                rollout_uid=rollout_uid,
             )
         serper = count_serper_calls(events)
         for call in serper:
@@ -397,16 +546,13 @@ class Runner:
                 query_sha256=call.command_sha256,
                 replicate=replicate,
                 approximate=True,
+                rollout_uid=rollout_uid,
             )
         if error_family == "none" and exit_reason in INFRA_EXIT_REASONS:
             error_family, error_kind = "infra", exit_reason
             error = f"harness exited with {exit_reason}"
             self._ledger.record_infra_failure_event(
-                arm=spec.arm,
-                unit_id=task.id,
-                seed=self._ctx.seed,
-                model=spec.policy.model,
-                exc=InfraError(error, kind=exit_reason),
+                **common, exc=InfraError(error, kind=exit_reason), rollout_uid=rollout_uid
             )
         if error_family == "none" and exit_reason in BUDGET_EXIT_REASONS:
             error_family, error_kind = "budget", "budget_exhausted"
@@ -417,27 +563,23 @@ class Runner:
                 else spec.budget.rollout_wall_clock_seconds
             )
             self._ledger.record_task_failure_event(
-                arm=spec.arm,
-                unit_id=task.id,
-                seed=self._ctx.seed,
-                model=spec.policy.model,
+                **common,
                 exc=BudgetExhausted(
                     error,
                     budget=float(limit),
                     spent=float(limit),
                     unit="steps" if exit_reason == "max_steps" else "seconds",
                 ),
+                rollout_uid=rollout_uid,
             )
         cap = spec.budget.usd_cap_per_rollout
         if error_family == "none" and cap is not None and usd is not None and usd > cap:
             error_family, error_kind = "budget", "budget_exhausted"
             error = f"rollout cost {usd:.4f} USD exceeds cap {cap}"
             self._ledger.record_task_failure_event(
-                arm=spec.arm,
-                unit_id=task.id,
-                seed=self._ctx.seed,
-                model=spec.policy.model,
+                **common,
                 exc=BudgetExhausted(error, budget=cap, spent=usd, unit="usd"),
+                rollout_uid=rollout_uid,
             )
 
         with TraceWriter(rollout_dir / "trajectory.jsonl", self._ctx.run_id) as writer:
@@ -449,6 +591,7 @@ class Runner:
             shutil.rmtree(artifacts, ignore_errors=True)
             shutil.copytree(outputs, artifacts)
         record = RolloutRecord(
+            rollout_uid=rollout_uid,
             task_id=task.id,
             source_benchmark=task.source_benchmark,
             replicate=replicate,
@@ -489,9 +632,23 @@ class Runner:
 
     # ---------------------------------------------------------------- scoring
 
-    def _score(self, task: Task, record: RolloutRecord) -> RolloutRecord:
+    def _score_task(
+        self, task: Task, records: list[RolloutRecord], resume: bool
+    ) -> list[RolloutRecord]:
+        return [self._score(task, r, resume=resume) for r in records]
+
+    def _score(self, task: Task, record: RolloutRecord, *, resume: bool) -> RolloutRecord:
         if record.error_family == "infra":
             return record
+        if record.score is not None:
+            return record
+        score_path = record.rollout_dir / SCORE_FILENAME
+        if resume and score_path.is_file():
+            try:
+                score = Score.model_validate(read_json(score_path))
+            except ValidationError as exc:
+                raise InfraError(f"corrupt {score_path}:\n{exc}", kind="corrupt_file") from exc
+            return record.model_copy(update={"score": score})
         artifacts = Artifacts(
             workspace=record.workspace_dir,
             final_answer=record.final_answer,
@@ -505,7 +662,7 @@ class Runner:
             return record.model_copy(
                 update={"error_family": "infra", "error_kind": exc.kind, "error": str(exc)}
             )
-        atomic_write_text(record.rollout_dir / "score.json", score.model_dump_json(indent=2) + "\n")
+        atomic_write_text(score_path, score.model_dump_json(indent=2) + "\n")
         return record.model_copy(update={"score": score})
 
     def _failures(
@@ -548,6 +705,13 @@ class Runner:
         return failures
 
 
+def _load_record(marker: Path) -> RolloutRecord:
+    try:
+        return RolloutRecord.model_validate(read_json(marker))
+    except ValidationError as exc:
+        raise InfraError(f"corrupt done marker {marker}:\n{exc}", kind="corrupt_file") from exc
+
+
 def _final_exit_reason(events: Sequence[TrajectoryEvent]) -> str | None:
     for event in events:
         if event.kind == "final":
@@ -557,9 +721,7 @@ def _final_exit_reason(events: Sequence[TrajectoryEvent]) -> str | None:
 
 
 def _dumps(value: object) -> str:
-    import json
-
     return json.dumps(to_json_value(value), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
 
-__all__ = ["Runner", "TaskFailure", "final_attempts"]
+__all__ = ["Runner"]

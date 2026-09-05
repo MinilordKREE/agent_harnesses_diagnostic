@@ -112,6 +112,23 @@ def write_manifest(
     return manifest_path
 
 
+def load_run_context(run_dir: Path) -> tuple[RunContext, Manifest]:
+    """Rebuild a ``RunContext`` from an existing run directory (M2.1 resume)."""
+    manifest = read_manifest(run_dir / MANIFEST_FILENAME)
+    ctx = RunContext(
+        run_id=manifest.run_id,
+        out_dir=run_dir.resolve(),
+        seed=manifest.seed,
+        config_sha256=manifest.config_sha256,
+        config_schema_version=manifest.config_schema_version,
+        git_sha=manifest.git_sha,
+        git_dirty=manifest.git_dirty,
+        created_at=manifest.created_at,
+        ahd_version=manifest.ahd_version,
+    )
+    return ctx, manifest
+
+
 def read_manifest(path: Path) -> Manifest:
     raw = read_json(path)
     try:

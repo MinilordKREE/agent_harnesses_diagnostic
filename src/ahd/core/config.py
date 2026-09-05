@@ -173,6 +173,9 @@ class RunDefaults(StrictModel):
     reference_max_attempts: int = Field(default=5, ge=1)
     keep_workspaces: bool = False
     arm: str = Field(default="seed", pattern=r"^[A-Za-z0-9._-]+$")
+    workers: int = Field(default=1, ge=1)
+    """Bounded parallelism: concurrent (task, replicate) lanes; each lane is one worker
+    subprocess plus its mock services."""
 
 
 class RunConfig(StrictModel):

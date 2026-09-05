@@ -17,6 +17,8 @@ type FailureFamily = Literal["infra", "task", "budget"]
 
 
 class RolloutRecord(StrictModel):
+    rollout_uid: str
+    """Identifies this attempt in ledger rows and its done marker (M2.1 resume)."""
     task_id: str
     source_benchmark: str
     replicate: str

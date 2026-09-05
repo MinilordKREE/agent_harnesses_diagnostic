@@ -24,6 +24,7 @@ def _record(
             artifact_sha256="a" * 64,
         )
     return RolloutRecord(
+        rollout_uid=f"uid-{replicate}-{attempt}",
         task_id="claw-T000_synthetic",
         source_benchmark="claw_eval",
         replicate=replicate,
