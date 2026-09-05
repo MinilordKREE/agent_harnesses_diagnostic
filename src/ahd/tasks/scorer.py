@@ -33,6 +33,13 @@ from evobench.evaluation.scorer import score_task
 from ahd.core.hashing import DEFAULT_IGNORED_PARTS, JsonValue, sha256_dir, to_json_value
 from ahd.errors import ConfigError, InfraError, TaskFailure
 from ahd.llm.ledger import Ledger
+from ahd.tasks.claw import (
+    CLAW_JUDGE_MAX_RETRIES,
+    PartialScore,
+    load_checks,
+    partial_score,
+    read_dispatches,
+)
 from ahd.tasks.judge import AhdJudgeClient, patched_claw_judge
 from ahd.tasks.models import Artifacts, Score, Task
 
@@ -297,6 +304,38 @@ class Scorer:
             artifact_sha256=artifact,
         )
 
+    def _judge_exhausted(
+        self,
+        task: Task,
+        artifacts: Artifacts,
+        judge: AhdJudgeClient,
+        *,
+        artifact: str,
+        raw_reason: str,
+    ) -> Score:
+        last_reply = judge.responses[-1].strip().replace("\n", " ")[:160] if judge.responses else ""
+        rollout_dir = (
+            artifacts.trajectory_path.parent if artifacts.trajectory_path is not None else None
+        )
+        partial: PartialScore | None = None
+        if rollout_dir is not None and self._claw_repo is not None:
+            partial = partial_score(
+                load_checks(task, claw_repo=self._claw_repo), read_dispatches(rollout_dir)
+            )
+        reason = (
+            f"empty_answer: Claw judge exhausted {judge.max_retry_index} retries on an empty or "
+            f"unparseable assistant reply (last judge reply: {last_reply!r}); {raw_reason}"
+        )
+        meta_raw: dict[str, Any] = {
+            "scorer_kind": "claw_grader",
+            "judge_exhausted": True,
+            "partial": partial.model_dump() if partial is not None else None,
+        }
+        meta = to_json_value({k: v for k, v in meta_raw.items() if v is not None})
+        assert isinstance(meta, dict)
+        score = self._task_failure(task, "empty_answer", reason, artifact=artifact, meta=meta)
+        return score.model_copy(update={"value": partial.value if partial is not None else 0.0})
+
     def score(self, task: Task, artifacts: Artifacts) -> Score:
         if task.excluded:
             raise ConfigError(f"task {task.id} is excluded: {task.exclusion_reason}")
@@ -318,6 +357,18 @@ class Scorer:
             raw = _call_score_task(evo_task, artifacts, judge)
 
         reason = str(raw.get("reason", ""))
+        if (
+            task.source_benchmark == "claw_eval"
+            and reason.startswith("claw_grader_error: ")
+            and judge.max_retry_index >= CLAW_JUDGE_MAX_RETRIES
+        ):
+            # claw-eval's judge re-sent the same prompt until its retries ran out: the judge
+            # could not grade the assistant's reply (empty or unparseable). That is the agent's
+            # failure, not the grader's (owner decision, M3.1). The value is the deterministic
+            # part of the Claw score; judged components count zero.
+            return self._judge_exhausted(
+                task, artifacts, judge, artifact=artifact, raw_reason=reason
+            )
         rule = classify_reason(reason)
         meta_raw = {
             "scorer_kind": rule.kind,

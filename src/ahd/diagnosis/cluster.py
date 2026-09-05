@@ -34,13 +34,25 @@ class FailureCluster(StrictModel):
     diagnosis_reference: Diagnosis
     oracle_validated_members: int
     max_severity: Severity
+    failure_types: dict[str, int] = {}
+    """Members by replay verdict (``deterministic`` / ``stochastic`` / ``unvalidated``)."""
 
 
 class ClusterSet(StrictModel):
     clusters: tuple[FailureCluster, ...]
     membership_sha256: str
+    failure_type_counts: dict[str, int] = {}
+    """Reference-arm diagnoses by failure type; the E0 headline distribution."""
     unvalidated: tuple[str, ...]
     """Failure keys whose oracle step could not be validated (excluded from oracle arms)."""
+
+
+def _type_counts(diagnoses: Sequence[Diagnosis]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for d in diagnoses:
+        key = d.provenance.failure_type or "unvalidated"
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
 
 
 def _rank(d: Diagnosis) -> tuple[int, int, str]:
@@ -69,6 +81,7 @@ def cluster(diagnoses: Sequence[Diagnosis]) -> ClusterSet:
                 diagnosis_reference=representative,
                 oracle_validated_members=sum(1 for d in members if d.provenance.oracle_validated),
                 max_severity=representative.severity,
+                failure_types=_type_counts(members),
             )
         )
     membership = sha256_of([{"id": c.id, "members": list(c.members)} for c in clusters])
@@ -76,5 +89,8 @@ def cluster(diagnoses: Sequence[Diagnosis]) -> ClusterSet:
         sorted(failure_key(d) for d in diagnoses if not d.provenance.oracle_validated)
     )
     return ClusterSet(
-        clusters=tuple(clusters), membership_sha256=membership, unvalidated=unvalidated
+        clusters=tuple(clusters),
+        membership_sha256=membership,
+        failure_type_counts=_type_counts(list(diagnoses)),
+        unvalidated=unvalidated,
     )

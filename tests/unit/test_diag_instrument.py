@@ -91,3 +91,16 @@ def test_comparable_ignores_duration_and_masks_volatile_text(loop: Any) -> None:
         loop._mask("see /tmp/tmpab12/x and 1788600547.43", [["secret-\\d+", "<s>"]])
         == "see <tmp> and <epoch>"
     )
+
+
+def test_tree_hash_tracks_workspace_mutation(loop: Any, tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    (ws / "inputs").mkdir(parents=True)
+    (ws / "inputs" / "a.txt").write_text("a", encoding="utf-8")
+    before = loop._tree_hash(ws)
+    assert before == loop._tree_hash(ws)  # deterministic
+    (ws / "outputs").mkdir()
+    assert loop._tree_hash(ws) == before  # an empty directory is not a file change
+    (ws / "outputs" / "report.md").write_text("x", encoding="utf-8")
+    assert loop._tree_hash(ws) != before
+    assert loop._tree_hash(tmp_path / "missing") == loop._tree_hash(tmp_path / "missing2")

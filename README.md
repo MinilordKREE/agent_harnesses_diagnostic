@@ -34,7 +34,7 @@ src/ahd/            the package
   runner/           RunSpec, Runner over Evo-Bench's worker, trajectory events, reference mode, summary
   diagnosis/        schema, align, attribution, replay (+ instrument/ copy of the seed), genuineness, signal, cluster, corrupt, leakage, pipeline
 configs/harness/        seed_components.yaml (the WHERE vocabulary), reference_block.md
-configs/prompts/diagnosis/  diagnosis template, reference/system signal, genuineness and leakage prompts
+configs/prompts/diagnosis/  diagnosis template, reference/system signal, genuineness and leakage prompts, causes.yaml
 third_party/evo-bench   git submodule (Apache-2.0), imported as the `evo-bench` path dependency
 external/claw-eval      (gitignored) Claw-Eval checkout made by `make setup-claw`
 tests/unit/         offline; the provider is a fake transport
@@ -80,9 +80,9 @@ uv run ahd run summarize <run_id>
 uv run ahd diag reference <reference_run_id>                      # genuineness verdicts
 uv run ahd diag align <run_id> --reference-run <reference_run_id>
 uv run ahd diag replay <run_id> --reference-run <reference_run_id> --k 3 --max-candidates 5
-uv run ahd diag signal <run_id> --reference-run <reference_run_id>
+uv run ahd diag signal <run_id> --reference-run <reference_run_id> [--allow-unvalidated]
 uv run ahd diag cluster <run_id> --reference-run <reference_run_id>
-uv run ahd diag corrupt <run_id> --arm corrupt_where_near --seed 0
+uv run ahd diag corrupt <run_id> --seed 0 [--arm corrupt_where_near]   # all arms' tables first, then rendering
 uv run ahd diag leakage <run_id>
 uv run ahd diag cost <run_id>
 ```

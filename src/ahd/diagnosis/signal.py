@@ -19,12 +19,37 @@ from ahd.diagnosis.align import Alignment, Candidate, actions_from_trajectory
 from ahd.diagnosis.attribution import AttributionRule, attribute, system_rule
 from ahd.diagnosis.llm import DiagnosisLLM
 from ahd.diagnosis.render import action_text, condensed
-from ahd.diagnosis.schema import CAUSE_LABELS, Diagnosis, How, Provenance, Severity, Where, Why
+from ahd.diagnosis.schema import (
+    CauseVocabulary,
+    Diagnosis,
+    FailureType,
+    How,
+    OracleBasis,
+    Provenance,
+    Severity,
+    Where,
+    Why,
+)
 from ahd.errors import TaskFailure
 from ahd.harness.components import ComponentManifest
 from ahd.tasks.models import Task
 
 PROMPT_DIR = Path("configs/prompts/diagnosis")
+FAILURE_TYPE_NOTES: dict[str, str] = {
+    "deterministic": (
+        "replacing the failed run's action at this step with the reference's action rescued "
+        "the run, and re-sampling the policy from the same prefix did not: this step caused "
+        "the failure"
+    ),
+    "stochastic": (
+        "re-sampling the policy from the prefix before this step usually passes: the failure "
+        "is a policy-level random event, and this is the step where it showed; diagnose what "
+        "the harness allowed to happen here rather than why the policy chose this action"
+    ),
+    "unrepairable": "neither the reference action nor re-sampling rescued the run at any step",
+    "unreplayable": "the prefix could not be re-executed faithfully; no counterfactual evidence",
+    "unvalidated": "no replay validation ran; this is the first class-level divergence only",
+}
 _SEVERITIES: tuple[str, ...] = ("low", "medium", "high", "critical")
 
 
@@ -41,13 +66,11 @@ def _severity(value: object) -> Severity:
     return text  # type: ignore[return-value]
 
 
-def _cause(value: object) -> str:
-    text = str(value or "").strip().lower()
-    if text not in CAUSE_LABELS:
-        raise TaskFailure(
-            f"cause_label {value!r} not in the taxonomy", kind="malformed_model_output"
-        )
-    return text
+def _cause(value: object, vocabulary: CauseVocabulary) -> str:
+    try:
+        return vocabulary.normalise(value)
+    except ValueError as exc:
+        raise TaskFailure(str(exc), kind="malformed_model_output") from exc
 
 
 def _component(value: object, rule: AttributionRule) -> str:
@@ -93,8 +116,12 @@ def reference_signal(
     manifest: ComponentManifest,
     llm: DiagnosisLLM,
     prompt_template: str,
+    vocabulary: CauseVocabulary,
+    failure_type: FailureType | None = None,
+    oracle_step_basis: OracleBasis = "unvalidated",
 ) -> Diagnosis:
-    """One REFERENCE-arm diagnosis for the given divergence candidate (normally the oracle)."""
+    """One REFERENCE-arm diagnosis for the validated oracle step (owner decision, M3.1: the
+    prompt receives the validated step, the divergence type and the failure type)."""
     reference_actions = [
         a for s in actions_from_trajectory(reference_trajectory) for a in s.actions
     ]
@@ -113,6 +140,9 @@ def reference_signal(
         .replace("{step}", str(candidate.step))
         .replace("{divergence_type}", candidate.divergence)
         .replace("{divergence_note}", candidate.note)
+        .replace("{failure_type}", failure_type or "unvalidated")
+        .replace("{oracle_step_basis}", oracle_step_basis)
+        .replace("{failure_type_note}", FAILURE_TYPE_NOTES[failure_type or "unvalidated"])
         .replace("{failed_action}", action_text(candidate.failed))
         .replace("{reference_action}", action_text(candidate.reference))
         .replace("{failed_trajectory}", condensed(failed_trajectory, keep_steps=(candidate.step,)))
@@ -124,7 +154,7 @@ def reference_signal(
         .replace(
             "{candidates}", "\n".join(f"- {c}: {manifest.by_id(c).role}" for c in rule.candidates)
         )
-        .replace("{cause_labels}", ", ".join(CAUSE_LABELS))
+        .replace("{cause_labels}", vocabulary.prompt_listing())
     )
     scope = "signal:reference:" + sha256_of(
         {
@@ -132,8 +162,11 @@ def reference_signal(
             "failed": failed_trajectory,
             "reference": reference_trajectory,
             "step": candidate.step,
+            "failure_type": failure_type,
+            "basis": oracle_step_basis,
         }
     )
+
     answer = llm.ask_json(prompt, unit_id=task.id, cache_scope=scope)
     data = answer.data
     component = (
@@ -148,7 +181,7 @@ def reference_signal(
             attribution="llm" if len(rule.candidates) > 1 else "rule",
         ),
         why=Why(
-            cause_label=_cause(data.get("cause_label")),
+            cause_label=_cause(data.get("cause_label"), vocabulary),
             mechanism_sentence=str(data.get("mechanism", "")).strip(),
         ),
         how=How(fix_hint=str(data.get("fix_hint", "")).strip()),
@@ -164,6 +197,8 @@ def reference_signal(
             model=answer.response.model,
             prompt_sha256=answer.prompt_sha256,
             request_sha256=answer.response.request_sha256,
+            failure_type=failure_type,
+            oracle_step_basis=oracle_step_basis,
         ),
         extra={
             "divergence": candidate.divergence,
@@ -185,6 +220,7 @@ def system_signal(
     manifest: ComponentManifest,
     llm: DiagnosisLLM,
     prompt_template: str,
+    vocabulary: CauseVocabulary,
 ) -> Diagnosis:
     """One SYSTEM-arm diagnosis from the failed run alone."""
     rule = system_rule(
@@ -202,7 +238,7 @@ def system_signal(
         .replace(
             "{candidates}", "\n".join(f"- {c}: {manifest.by_id(c).role}" for c in rule.candidates)
         )
-        .replace("{cause_labels}", ", ".join(CAUSE_LABELS))
+        .replace("{cause_labels}", vocabulary.prompt_listing())
     )
     scope = "signal:system:" + sha256_of({"task": task.id, "failed": failed_trajectory})
     answer = llm.ask_json(prompt, unit_id=task.id, cache_scope=scope)
@@ -225,7 +261,7 @@ def system_signal(
             attribution="llm" if len(rule.candidates) > 1 else "rule",
         ),
         why=Why(
-            cause_label=_cause(data.get("cause_label")),
+            cause_label=_cause(data.get("cause_label"), vocabulary),
             mechanism_sentence=str(data.get("mechanism", "")).strip(),
         ),
         how=How(fix_hint=str(data.get("fix_hint", "")).strip()),

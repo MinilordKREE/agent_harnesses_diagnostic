@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -292,3 +293,86 @@ def test_claw_scoring_sets_repo_env_for_the_call(
     )
     assert seen == [str(tmp_path / "claw"), None]  # set for Claw only, restored afterwards
     assert "EVOBENCH_CLAW_REPO" not in os.environ
+
+
+def _claw_repo_with_checks(tmp_path: Path) -> Path:
+    repo = tmp_path / "claw"
+    (repo / "tasks" / "T000_synthetic").mkdir(parents=True)
+    (repo / "tasks" / "T000_synthetic" / "task.yaml").write_text(
+        "scoring_components:\n"
+        "  - name: listing\n    weight: 0.5\n    check:\n      type: tool_called\n"
+        "      tool_name: todo_list_tasks\n"
+        "  - name: words\n    weight: 0.5\n    check:\n      type: keywords_present\n"
+        "      keywords: [x]\n",
+        encoding="utf-8",
+    )
+    return repo
+
+
+def test_judge_exhaustion_is_an_empty_answer_task_failure(
+    taskset: TaskSet, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_claw_patch: None
+) -> None:
+    """claw-eval retries the judge on unparseable output up to five times and then crashes on
+    ``None.score``; when the judge saw those repeats the rollout is the agent's failure."""
+    from ahd.tasks.claw import CLAW_JUDGE_MAX_RETRIES
+
+    def fake_score_task(
+        task: dict[str, Any], workspace: Path, final_answer: str, judge_client: Any = None
+    ) -> dict[str, Any]:
+        for _ in range(CLAW_JUDGE_MAX_RETRIES + 1):
+            judge_client.create(messages=[{"role": "user", "content": "grade"}])
+        return {
+            "passed": False,
+            "score": 0.0,
+            "reason": (
+                "claw_grader_error: AttributeError: 'NoneType' object has no attribute 'score'"
+            ),
+        }
+
+    monkeypatch.setattr(scorer_module, "score_task", fake_score_task)
+    rollout = tmp_path / "rollout"
+    rollout.mkdir()
+    (rollout / "trajectory.json").write_text("{}", encoding="utf-8")
+    (rollout / "claw_dispatches.jsonl").write_text(
+        json.dumps({"tool_name": "todo_list_tasks", "response_status": 200}) + "\n",
+        encoding="utf-8",
+    )
+    provider = FakeProvider("Unable to score: no assistant response or actions were provided.")
+    ledger = Ledger(tmp_path / "ledger.jsonl", "run-s")
+    judge = AhdJudgeClient(provider, config=JudgeConfig(), api_base="https://x", seed=1)
+    scorer = Scorer(
+        judge=judge, ledger=ledger, arm="A", seed=1, claw_repo=_claw_repo_with_checks(tmp_path)
+    )
+    score = scorer.score(
+        taskset.by_id("claw-T000_synthetic"),
+        Artifacts(
+            workspace=_workspace(tmp_path),
+            final_answer="",
+            trajectory_path=rollout / "trajectory.json",
+        ),
+    )
+    assert score.task_failure == "empty_answer" and not score.passed
+    assert score.reason.startswith("empty_answer: Claw judge exhausted 5 retries")
+    assert "Unable to score" in score.reason
+    assert score.value == pytest.approx(
+        0.8 * 0.5 + 0.2 * 1.0
+    )  # tool_called half + clean robustness
+    assert score.judge_meta["judge_exhausted"] is True
+    rows = [r for r in read_ledger(ledger.path) if r.event == "task_failure"]
+    assert rows and rows[-1].error_kind == "empty_answer"
+    assert len([r for r in read_ledger(ledger.path) if r.event == "infra_failure"]) == 0
+
+
+def test_grader_error_without_exhaustion_stays_infra(
+    taskset: TaskSet, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_claw_patch: None
+) -> None:
+    _stub(
+        monkeypatch, {"passed": False, "score": 0.0, "reason": "claw_grader_error: ImportError: x"}
+    )
+    scorer, _ledger, _ = _scorer(tmp_path)
+    with pytest.raises(InfraError) as info:
+        scorer.score(
+            taskset.by_id("claw-T000_synthetic"),
+            Artifacts(workspace=_workspace(tmp_path), final_answer=""),
+        )
+    assert info.value.kind == "grader_error"

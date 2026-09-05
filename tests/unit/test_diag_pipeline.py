@@ -15,6 +15,7 @@ from ahd.core.context import create_run_context
 from ahd.core.io import read_json
 from ahd.core.manifest import read_manifest, write_manifest
 from ahd.diagnosis import genuineness, leakage
+from ahd.diagnosis.corrupt import ARM_CORRUPTION
 from ahd.diagnosis.llm import DiagnosisLLM
 from ahd.diagnosis.pipeline import (
     align_failures,
@@ -270,7 +271,7 @@ def _reply(request: ChatRequest) -> str:
     return json.dumps(
         {
             "severity": "high",
-            "cause_label": "premature_termination" if "todo" in prompt else "instruction_misread",
+            "cause_label": "premature_termination" if "todo" in prompt else "contract_violation",
             "mechanism": f"The {first} accepts an early stop after run_shell_command output.",
             "fix_hint": f"Make {first} continue until the state changed.",
             "component": first,
@@ -310,7 +311,7 @@ def test_pipeline_end_to_end(
     assert alignments[0].alignment.candidates[0].divergence == "premature_finish"
     assert alignments[2].alignment.candidates[0].divergence == "no_tool_call"
 
-    diagnoses = signal_failures(
+    refused = signal_failures(
         run,
         ref,
         taskset=taskset,
@@ -319,7 +320,20 @@ def test_pipeline_end_to_end(
         llm=llm,
         prompts=load_prompts(),
     )
+    assert not refused.reference and len(refused.errors) == 3  # no replay verdict, not allowed
+    diagnoses = signal_failures(
+        run,
+        ref,
+        taskset=taskset,
+        manifest=manifest,
+        harness_snapshot_id=snapshot_id,
+        llm=llm,
+        prompts=load_prompts(),
+        allow_unvalidated=True,
+    )
     assert len(diagnoses.reference) == 3 and len(diagnoses.system) == 3 and not diagnoses.errors
+    assert set(diagnoses.failure_types.values()) == {"unvalidated"} and not diagnoses.excluded
+    assert all(d.provenance.oracle_step_basis == "unvalidated" for d in diagnoses.reference)
     assert all(not d.provenance.oracle_validated for d in diagnoses.reference)  # no replay ran
     assert (
         diagnoses.reference[0].where.component == "completion_policy"
@@ -339,33 +353,36 @@ def test_pipeline_end_to_end(
     loaded, _ = load_clusters(run)
     assert loaded == clusters
 
-    for arm in (
-        "reference",
-        "system",
-        "shuffled",
-        "corrupt_where_near",
-        "corrupt_where_far",
-        "corrupt_why",
-        "corrupt_how",
-    ):
-        _table, rendered = corrupt_run(run, arm=arm, seed=7, manifest=manifest)
+    results = corrupt_run(run, seed=7, manifest=manifest)
+    assert set(results) == set(ARM_CORRUPTION)
+    for arm, (table, rendered) in results.items():
         assert (run / "diagnosis" / "assignments" / f"{arm}-s7.json").is_file()
         assert len(rendered) == 3
-        for item in rendered:
+        for item, assignment in zip(rendered, table.assignments, strict=True):
             assert item.impossible is None, (arm, item.impossible)
             assert item.rendered is not None and item.diagnosis is not None
-            assert "[tool]" in item.rendered.text or item.rendered.truncated["mechanism"]
+            assert "No further detail" not in item.rendered.text
             assert "run_shell_command" not in item.rendered.text.split("WHY")[1]
+            assert assignment.rendered_lengths == item.rendered.field_lengths
             if arm.startswith("corrupt_where"):
                 meta = item.diagnosis.where.distance_meta
                 assert meta is not None
                 assert (meta.same_layer == (arm == "corrupt_where_near")) or meta.distance_fallback
             if arm == "system":
                 assert item.diagnosis.source == "system"
-    again, _ = corrupt_run(run, arm="corrupt_where_far", seed=7, manifest=manifest)
-    assert again.arm == "corrupt_where_far"
+    caps = read_json(run / "diagnosis" / "rendered" / "reference-s7" / "caps.json")
+    assert isinstance(caps, dict) and len(caps) == 3
+    # every arm's field length is within the cluster cap
+    for _table, rendered in results.values():
+        for item in rendered:
+            assert item.rendered is not None
+            cap = caps[item.cluster_id]
+            assert isinstance(cap, dict)
+            assert item.rendered.field_lengths["mechanism"] <= int(str(cap["mechanism"]))
+    only_far = corrupt_run(run, seed=7, manifest=manifest, arms=("corrupt_where_far",))
+    assert list(only_far) == ["corrupt_where_far"]
     first = read_json(run / "diagnosis" / "assignments" / "corrupt_where_far-s7.json")
-    assert first == again.model_dump(mode="json")
+    assert first == only_far["corrupt_where_far"][0].model_dump(mode="json")
 
     report = leakage_run(run, manifest=manifest, llm=llm, prompt_template=leakage.load_prompt())
     assert report.n == 3 and report.top1_rate == pytest.approx(
@@ -402,7 +419,7 @@ def test_diag_parser_and_cost_command(
     args = parser.parse_args(
         ["diag", "corrupt", "study", "--arm", "corrupt_where_near", "--seed", "3"]
     )
-    assert args.arm == "corrupt_where_near" and args.seed == 3
+    assert args.arm == ["corrupt_where_near"] and args.seed == 3
     with pytest.raises(SystemExit):
         parser.parse_args(["diag", "corrupt", "study", "--arm", "bogus", "--seed", "3"])
     manifest = ComponentManifest.load(REPO_ROOT / "configs" / "harness" / "seed_components.yaml")

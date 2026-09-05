@@ -7,9 +7,11 @@ from pathlib import Path
 import pytest
 
 from ahd.diagnosis.schema import (
-    RenderBudget,
+    FieldCaps,
     _fit,
+    caps_for,
     identifier_tokens,
+    load_causes,
     load_template,
     render,
     strip_identifiers,
@@ -56,40 +58,46 @@ def test_component_ids_and_paths_are_stripped_only_on_boundaries(tokens: dict[st
     assert "[path]" in out
 
 
-def test_fit_trims_and_pads() -> None:
+def test_fit_trims_and_never_pads() -> None:
     long = "word " * 200
-    text, truncated = _fit(long, 100, "filler.")
+    text, truncated = _fit(long, 100)
     assert truncated and len(text) <= 100 and text.endswith(".")
-    short, truncated2 = _fit("tiny.", 100, "No further detail.")
-    assert not truncated2 and len(short) >= 90 and short.startswith("tiny.")
+    short, truncated2 = _fit("tiny.", 100)
+    assert not truncated2 and short == "tiny."
 
 
-def test_render_matches_lengths_across_arms(tokens: dict[str, str]) -> None:
+def test_render_caps_come_from_the_longest_arm(tokens: dict[str, str]) -> None:
     template = load_template(
         str(REPO_ROOT / "configs" / "prompts" / "diagnosis" / "diagnosis_template.md")
     )
-    budget = RenderBudget(mechanism=200, fix_hint=120)
-    a = render(
-        diagnosis(mechanism="The system_prompt tells the policy to stop early " * 8),
-        template,
-        tokens=tokens,
-        budget=budget,
-    )
-    b = render(diagnosis(mechanism="short.", fix="tiny."), template, tokens=tokens, budget=budget)
-    for r in (a, b):
-        assert r.field_lengths["mechanism"] <= 200 and r.field_lengths["fix_hint"] <= 120
-        assert r.field_lengths["mechanism"] >= 180 and r.field_lengths["fix_hint"] >= 108
-    assert a.truncated["mechanism"] and not b.truncated["mechanism"]
-    assert a.placeholder_counts.get("component", 0) >= 1 or a.truncated["mechanism"]
-    c = render(
-        diagnosis(mechanism="The system_prompt stops early."),
-        template,
-        tokens=tokens,
-        budget=budget,
-    )
-    assert c.placeholder_counts == {"component": 1}
+    long = diagnosis(mechanism="The system_prompt tells the policy to stop early " * 8)
+    short = diagnosis(mechanism="short.", fix="tiny.")
+    caps = caps_for([long, short], tokens)
+    assert caps.mechanism == len(("The [component] tells the policy to stop early " * 8).strip())
+    a = render(long, template, tokens=tokens, caps=caps)
+    b = render(short, template, tokens=tokens, caps=caps)
+    assert not a.truncated["mechanism"] and a.field_lengths["mechanism"] == caps.mechanism
+    assert b.field_lengths["mechanism"] == len("short.") and "No further detail" not in b.text
+    tight = FieldCaps(mechanism=60, fix_hint=40)
+    c = render(long, template, tokens=tokens, caps=tight)
+    assert c.truncated["mechanism"] and c.field_lengths["mechanism"] <= 60
+    assert a.placeholder_counts == {"component": 8}
     assert "system_prompt" in a.text.split("WHY")[0]  # WHERE line keeps the id
     assert "[component]" in a.text.split("WHY")[1]
+
+
+def test_cause_vocabulary() -> None:
+    vocab = load_causes(REPO_ROOT / "configs" / "prompts" / "diagnosis" / "causes.yaml")
+    assert 12 <= len(vocab.causes) <= 15 and len(set(vocab.ids())) == len(vocab.ids())
+    assert {"premature_termination", "contract_violation", "error_recovery"} <= set(vocab.ids())
+    assert vocab.normalise("Premature_Termination") == "premature_termination"
+    assert vocab.normalise("other: judge misread the rubric") == "other:judge misread the rubric"
+    with pytest.raises(ValueError, match="not in the vocabulary"):
+        vocab.normalise("made_up_label")
+    with pytest.raises(ValueError):
+        vocab.normalise("other:")
+    listing = vocab.prompt_listing()
+    assert listing.count("\n") == len(vocab.causes) and "other:<short text>" in listing
 
 
 def test_template_validation(tmp_path: Path) -> None:

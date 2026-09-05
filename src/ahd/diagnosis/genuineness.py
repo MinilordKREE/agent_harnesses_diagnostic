@@ -120,7 +120,7 @@ def deterministic_checks(
             gathering = [
                 a
                 for a in actions
-                if a.klass in ("shell_ro", "shell_mut")
+                if a.klass in ("shell_ro", "shell_mut", "shell_opaque")
                 and _SEARCH_ACTION.search(str(a.arguments.get("command", "")))
             ]
             g1 = bool(gathering)

@@ -19,7 +19,9 @@ it is {rule_id}: {rule_note}):
 
 Answer with a single JSON object with these keys:
 - "severity": one of "low", "medium", "high", "critical"
-- "cause_label": one of {cause_labels}
+- "cause_label": exactly one id from this controlled vocabulary (or `other:<short text>` only
+  when none fits):
+{cause_labels}
 - "mechanism": one or two sentences explaining the mechanism by which the harness produced the
   failure; describe behaviour, not file names
 - "fix_hint": one sentence describing what the harness should do differently

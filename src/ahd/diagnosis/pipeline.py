@@ -20,6 +20,7 @@ Layout under ``<run>/diagnosis/``::
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Sequence
 from pathlib import Path
@@ -41,10 +42,15 @@ from ahd.diagnosis.leakage import LeakageReport, probe
 from ahd.diagnosis.llm import DiagnosisLLM
 from ahd.diagnosis.replay import Replayer, ReplayResult
 from ahd.diagnosis.schema import (
+    CauseVocabulary,
     Diagnosis,
-    RenderBudget,
+    FailureType,
+    FieldCaps,
+    OracleBasis,
     Rendered,
+    caps_for,
     identifier_tokens,
+    load_causes,
     load_template,
     render,
 )
@@ -91,8 +97,6 @@ def _load_list[T: StrictModel](path: Path, model: type[T], *, what: str) -> list
 
 
 def _dump(items: Sequence[StrictModel]) -> str:
-    import json
-
     return (
         json.dumps([i.model_dump(mode="json") for i in items], ensure_ascii=False, indent=2) + "\n"
     )
@@ -195,7 +199,15 @@ def align_failures(run_dir: Path, reference_run: Path) -> list[AlignmentRecord]:
         if reference is None:
             logger.warning("no genuine reference", extra={"task_id": failure.task_id})
             continue
-        failed_dir = Path(failure.trajectory_path).parent
+        # derive the rollout directory from the run layout: the recorded absolute path goes
+        # stale when a run directory is copied or moved (observed 2026-09-05)
+        failed_dir = rollout_dir(run_dir, failure.task_id, failure.replicate, failure.attempt)
+        if not (failed_dir / "trajectory.json").is_file():
+            raise InfraError(
+                f"trajectory.json missing under {failed_dir} (failures.json recorded "
+                f"{failure.trajectory_path})",
+                kind="missing_file",
+            )
         reference_dir = rollout_dir(
             reference_run, failure.task_id, reference.replicate, reference.attempt
         )
@@ -311,6 +323,29 @@ def replay_failures(
             )
         )
     atomic_write_text(diagnosis_dir(run_dir) / "replays.json", _dump(results))
+    counts: dict[str, int] = {}
+    for r in results:
+        counts[r.failure_type] = counts.get(r.failure_type, 0) + 1
+    summary = {
+        "counts": dict(sorted(counts.items())),
+        "per_failure": {
+            r.failure_key: {
+                "failure_type": r.failure_type,
+                "oracle_step": r.oracle_step,
+                "oracle_step_basis": r.oracle_step_basis,
+                "sufficient_set": list(r.sufficient_set),
+                "usd": r.usd,
+            }
+            for r in results
+        },
+        "k": k,
+        "max_candidates": max_candidates,
+        "economize": economize,
+    }
+    atomic_write_text(
+        diagnosis_dir(run_dir) / "failure_types.json",
+        json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
+    )
     return results
 
 
@@ -328,6 +363,11 @@ class DiagnosisSet(StrictModel):
     reference: tuple[Diagnosis, ...]
     system: tuple[Diagnosis, ...]
     errors: dict[str, str]
+    excluded: dict[str, str] = {}
+    """Failures kept out of the oracle (reference) arm, by failure type: ``unrepairable`` and
+    ``unreplayable`` (owner decision, M3.1). They still get a SYSTEM-arm diagnosis."""
+    failure_types: dict[str, str] = {}
+    """failure key -> replay verdict (``unvalidated`` when no replay ran)."""
 
 
 def signal_failures(
@@ -339,15 +379,22 @@ def signal_failures(
     harness_snapshot_id: str,
     llm: DiagnosisLLM,
     prompts: dict[str, str],
+    allow_unvalidated: bool = False,
+    vocabulary: CauseVocabulary | None = None,
 ) -> DiagnosisSet:
+    """Reference-arm diagnoses need a replay verdict per failure (``ahd diag replay``); with
+    ``allow_unvalidated`` a failure without one is diagnosed at ``t_class`` and marked so."""
     failures = {
         failure_key_of(f): f
         for f in _load_list(run_dir / "failures.json", FailureRecord, what="failures.json")
     }
+    vocabulary = vocabulary or load_causes()
     replays = load_replays(run_dir)
     reference_out: list[Diagnosis] = []
     system_out: list[Diagnosis] = []
     errors: dict[str, str] = {}
+    excluded: dict[str, str] = {}
+    failure_types: dict[str, str] = {}
     for record in load_alignments(run_dir):
         if record.skipped:
             errors[record.failure_key] = record.skipped
@@ -360,32 +407,50 @@ def signal_failures(
             )
         )
         replay = replays.get(safe_key(record.task_id, record.replicate, record.attempt))
-        validated = replay is not None and replay.oracle_step is not None
-        step = (
-            replay.oracle_step
-            if replay is not None and replay.oracle_step is not None
-            else record.alignment.candidates[0].step
-        )
+        failure_type: FailureType | None = replay.failure_type if replay is not None else None
+        failure_types[record.failure_key] = failure_type or "unvalidated"
+        reference_arm = True
+        basis: OracleBasis = "unvalidated"
+        step = record.alignment.candidates[0].step
+        if replay is None:
+            if not allow_unvalidated:
+                errors[record.failure_key] = (
+                    "no replay verdict; run `ahd diag replay` first (or pass --allow-unvalidated)"
+                )
+                reference_arm = False
+        elif replay.oracle_step is None:
+            excluded[record.failure_key] = replay.failure_type
+            reference_arm = False
+        else:
+            step, basis = replay.oracle_step, replay.oracle_step_basis
         candidate = next(c for c in record.alignment.candidates if c.step == step)
+        validated = replay is not None and replay.oracle_step is not None
         failure = failures[record.failure_key]
         try:
-            reference_out.append(
-                reference_signal(
-                    task,
-                    failed_trajectory=failed,
-                    reference_trajectory=reference,
-                    alignment=record.alignment,
-                    candidate=candidate,
-                    oracle_validated=validated,
-                    reference_run=f"{reference_run.name}:{record.reference_replicate}/{record.reference_attempt}",
-                    replicate=record.replicate,
-                    attempt=record.attempt,
-                    harness_snapshot_id=harness_snapshot_id,
-                    manifest=manifest,
-                    llm=llm,
-                    prompt_template=prompts["reference_signal"],
+            if reference_arm:
+                reference_out.append(
+                    reference_signal(
+                        task,
+                        failed_trajectory=failed,
+                        reference_trajectory=reference,
+                        alignment=record.alignment,
+                        candidate=candidate,
+                        oracle_validated=validated,
+                        reference_run=(
+                            f"{reference_run.name}:{record.reference_replicate}/"
+                            f"{record.reference_attempt}"
+                        ),
+                        replicate=record.replicate,
+                        attempt=record.attempt,
+                        harness_snapshot_id=harness_snapshot_id,
+                        manifest=manifest,
+                        llm=llm,
+                        prompt_template=prompts["reference_signal"],
+                        vocabulary=vocabulary,
+                        failure_type=failure_type,
+                        oracle_step_basis=basis,
+                    )
                 )
-            )
             system_out.append(
                 system_signal(
                     task,
@@ -398,12 +463,19 @@ def signal_failures(
                     manifest=manifest,
                     llm=llm,
                     prompt_template=prompts["system_signal"],
+                    vocabulary=vocabulary,
                 )
             )
         except TaskFailure as exc:
             errors[record.failure_key] = f"{exc.kind}: {exc}"
             logger.warning("signal failed", extra={"failure": record.failure_key, "kind": exc.kind})
-    result = DiagnosisSet(reference=tuple(reference_out), system=tuple(system_out), errors=errors)
+    result = DiagnosisSet(
+        reference=tuple(reference_out),
+        system=tuple(system_out),
+        errors=errors,
+        excluded=excluded,
+        failure_types=failure_types,
+    )
     atomic_write_text(
         diagnosis_dir(run_dir) / "diagnoses.json", result.model_dump_json(indent=2) + "\n"
     )
@@ -498,92 +570,129 @@ class RenderedCluster(StrictModel):
     rendered: Rendered | None
 
 
+def _arm_diagnosis(
+    arm: str,
+    cluster_: FailureCluster,
+    assignment: corrupt_module.Assignment,
+    usable: Sequence[FailureCluster],
+    system_by_key: dict[str, Diagnosis],
+) -> tuple[Diagnosis | None, str | None]:
+    """The diagnosis a proposer in ``arm`` would receive for this cluster, or why none."""
+    if arm == "system":
+        system = system_by_key.get(cluster_.representative)
+        if system is None:
+            return None, "no system diagnosis for the representative"
+        return system, None
+    if assignment.impossible is not None:
+        return None, assignment.impossible
+    return corrupt_module.apply(cluster_.diagnosis_reference, assignment, usable), None
+
+
 def corrupt_run(
     run_dir: Path,
     *,
-    arm: str,
     seed: int,
     manifest: ComponentManifest,
+    arms: Sequence[str] = tuple(ARM_CORRUPTION),
     template: str | None = None,
-    budget: RenderBudget | None = None,
-) -> tuple[AssignmentTable, list[RenderedCluster]]:
-    if arm not in ARM_CORRUPTION:
-        raise ConfigError(f"unknown arm {arm!r}; known: {sorted(ARM_CORRUPTION)}")
+) -> dict[str, tuple[AssignmentTable, list[RenderedCluster]]]:
+    """Assignment tables for every arm (written before any rendering), then rendering with
+    per-cluster caps taken across all arms of this seed (owner decision, M3.1). Returns the
+    requested arms only; the tables of the other arms are still written."""
+    for arm in arms:
+        if arm not in ARM_CORRUPTION:
+            raise ConfigError(f"unknown arm {arm!r}; known: {sorted(ARM_CORRUPTION)}")
     clusters, activity = load_clusters(run_dir)
     diagnoses = load_diagnoses(run_dir)
-    usable: list[FailureCluster] = [c for c in clusters.clusters]
-    table = corrupt_module.assign(
-        usable,
-        arm=arm,
-        seed=seed,
-        manifest=manifest,
-        activity={
-            cid: {comp: set(steps) for comp, steps in comps.items()}
-            for cid, comps in activity.activity.items()
-        },
-        sufficient={cid: set(steps) for cid, steps in activity.sufficient.items()},
-    )
+    usable: list[FailureCluster] = list(clusters.clusters)
+    activity_sets = {
+        cid: {comp: set(steps) for comp, steps in comps.items()}
+        for cid, comps in activity.activity.items()
+    }
+    sufficient_sets = {cid: set(steps) for cid, steps in activity.sufficient.items()}
     out = diagnosis_dir(run_dir)
     (out / "assignments").mkdir(exist_ok=True)
-    atomic_write_text(
-        out / "assignments" / f"{arm}-s{seed}.json", table.model_dump_json(indent=2) + "\n"
-    )
-    # rendering, only after the table is on disk
+    tables: dict[str, AssignmentTable] = {}
+    for arm in ARM_CORRUPTION:
+        table = corrupt_module.assign(
+            usable,
+            arm=arm,
+            seed=seed,
+            manifest=manifest,
+            activity=activity_sets,
+            sufficient=sufficient_sets,
+        )
+        tables[arm] = table
+        atomic_write_text(
+            out / "assignments" / f"{arm}-s{seed}.json", table.model_dump_json(indent=2) + "\n"
+        )
+    # rendering, only after every table is on disk
     tokens = identifier_tokens(manifest, tool_names=activity.tool_names)
     template = template or load_template()
     system_by_key = {failure_key(d): d for d in diagnoses.system}
-    rendered_dir = out / "rendered" / f"{arm}-s{seed}"
-    rendered_dir.mkdir(parents=True, exist_ok=True)
-    results: list[RenderedCluster] = []
-    for assignment in table.assignments:
-        c = next(x for x in usable if x.id == assignment.cluster_id)
-        base = c.diagnosis_reference
-        if arm == "system":
-            system = system_by_key.get(c.representative)
-            if system is None:
-                results.append(
+    per_arm_diag: dict[str, dict[str, tuple[Diagnosis | None, str | None]]] = {}
+    for arm, table in tables.items():
+        per_arm_diag[arm] = {}
+        for assignment in table.assignments:
+            c = next(x for x in usable if x.id == assignment.cluster_id)
+            per_arm_diag[arm][c.id] = _arm_diagnosis(arm, c, assignment, usable, system_by_key)
+    caps: dict[str, FieldCaps] = {}
+    for c in usable:
+        present = [
+            d for arm in ARM_CORRUPTION for d in [per_arm_diag[arm][c.id][0]] if d is not None
+        ]
+        caps[c.id] = caps_for(present, tokens)
+    results: dict[str, tuple[AssignmentTable, list[RenderedCluster]]] = {}
+    for arm in arms:
+        table = tables[arm]
+        rendered_dir = out / "rendered" / f"{arm}-s{seed}"
+        rendered_dir.mkdir(parents=True, exist_ok=True)
+        items: list[RenderedCluster] = []
+        updated: list[corrupt_module.Assignment] = []
+        for assignment in table.assignments:
+            c = next(x for x in usable if x.id == assignment.cluster_id)
+            diagnosis, impossible = per_arm_diag[arm][c.id]
+            if diagnosis is None:
+                items.append(
                     RenderedCluster(
                         cluster_id=c.id,
                         arm=arm,
                         seed=seed,
-                        corruption="none",
-                        impossible="no system diagnosis for the representative",
+                        corruption=assignment.corruption,
+                        impossible=impossible,
                         diagnosis=None,
                         rendered=None,
                     )
                 )
+                updated.append(assignment)
                 continue
-            diagnosis = system
-        elif assignment.impossible is not None:
-            results.append(
+            rendered = render(diagnosis, template, tokens=tokens, caps=caps[c.id])
+            atomic_write_text(rendered_dir / f"{c.id}.md", rendered.text + "\n")
+            items.append(
                 RenderedCluster(
                     cluster_id=c.id,
                     arm=arm,
                     seed=seed,
                     corruption=assignment.corruption,
-                    impossible=assignment.impossible,
-                    diagnosis=None,
-                    rendered=None,
+                    impossible=None,
+                    diagnosis=diagnosis,
+                    rendered=rendered,
                 )
             )
-            continue
-        else:
-            diagnosis = corrupt_module.apply(base, assignment, usable)
-        rendered = render(diagnosis, template, tokens=tokens, budget=budget)
-        atomic_write_text(rendered_dir / f"{c.id}.md", rendered.text + "\n")
-        results.append(
-            RenderedCluster(
-                cluster_id=c.id,
-                arm=arm,
-                seed=seed,
-                corruption=assignment.corruption,
-                impossible=None,
-                diagnosis=diagnosis,
-                rendered=rendered,
+            updated.append(
+                assignment.model_copy(update={"rendered_lengths": rendered.field_lengths})
             )
+        table = table.model_copy(update={"assignments": tuple(updated)})
+        atomic_write_text(
+            out / "assignments" / f"{arm}-s{seed}.json", table.model_dump_json(indent=2) + "\n"
         )
-    atomic_write_text(rendered_dir / "rendered.json", _dump(results))
-    return table, results
+        atomic_write_text(rendered_dir / "rendered.json", _dump(items))
+        atomic_write_text(
+            rendered_dir / "caps.json",
+            json.dumps({cid: cap.model_dump() for cid, cap in caps.items()}, indent=2) + "\n",
+        )
+        results[arm] = (table, items)
+    return results
 
 
 # ---------------------------------------------------------------- 7. leakage

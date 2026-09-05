@@ -618,9 +618,9 @@ def cmd_diag_replay(args: argparse.Namespace) -> int:
         )
     for result in results:
         print(
-            f"{result.failure_key}: oracle={result.oracle_step} ({result.oracle_status}) "
-            f"sufficient_set={list(result.sufficient_set)} usd={result.usd:.4f} "
-            f"instrument={result.instrument_snapshot_id}"
+            f"{result.failure_key}: {result.failure_type} oracle={result.oracle_step} "
+            f"({result.oracle_step_basis}) sufficient_set={list(result.sufficient_set)} "
+            f"usd={result.usd:.4f} instrument={result.instrument_snapshot_id}"
         )
     print(f"written: {run_dir / 'diagnosis' / 'replays.json'}")
     return EXIT_OK
@@ -641,7 +641,10 @@ def cmd_diag_signal(args: argparse.Namespace) -> int:
         harness_snapshot_id=diag.studied.snapshot_id,
         llm=diag.llm,
         prompts=load_prompts(),
+        allow_unvalidated=bool(args.allow_unvalidated),
     )
+    for key, ftype in result.excluded.items():
+        print(f"[excluded]  {key}: {ftype} (no oracle arm)")
     for d in result.reference:
         p = d.provenance
         print(
@@ -687,15 +690,18 @@ def cmd_diag_cluster(args: argparse.Namespace) -> int:
 
 
 def cmd_diag_corrupt(args: argparse.Namespace) -> int:
+    from ahd.diagnosis.corrupt import ARM_CORRUPTION
     from ahd.diagnosis.pipeline import corrupt_run
 
     run_dir = _diag_run_dir(args)
     diag = _DiagContext(run_dir)
-    table, rendered = corrupt_run(run_dir, arm=args.arm, seed=args.seed, manifest=diag.components)
-    for item in rendered:
-        if item.impossible:
-            print(f"{item.cluster_id}: IMPOSSIBLE ({item.impossible})")
-        else:
+    arms = tuple(args.arm) if args.arm else tuple(ARM_CORRUPTION)
+    results = corrupt_run(run_dir, seed=args.seed, manifest=diag.components, arms=arms)
+    for arm, (table, rendered) in results.items():
+        for item in rendered:
+            if item.impossible:
+                print(f"[{arm}] {item.cluster_id}: IMPOSSIBLE ({item.impossible})")
+                continue
             assert item.diagnosis is not None and item.rendered is not None
             meta = item.diagnosis.where.distance_meta
             distance = (
@@ -705,14 +711,15 @@ def cmd_diag_corrupt(args: argparse.Namespace) -> int:
                 else ""
             )
             print(
-                f"{item.cluster_id}: {item.corruption} -> "
+                f"[{arm}] {item.cluster_id}: {item.corruption} -> "
                 f"{item.diagnosis.where.component}@{item.diagnosis.where.step}{distance} "
                 f"lengths={item.rendered.field_lengths}"
             )
-    print(
-        f"assignments: {run_dir / 'diagnosis' / 'assignments' / f'{args.arm}-s{args.seed}.json'} "
-        f"({len(table.assignments)} clusters)"
-    )
+        print(
+            f"[{arm}] assignments: "
+            f"{run_dir / 'diagnosis' / 'assignments' / f'{arm}-s{args.seed}.json'} "
+            f"({len(table.assignments)} clusters)"
+        )
     return EXIT_OK
 
 
@@ -874,6 +881,12 @@ def build_parser() -> argparse.ArgumentParser:
             dp.add_argument(
                 "--reference-run", required=True, help="run id of the reference-mode run"
             )
+        if name == "signal":
+            dp.add_argument(
+                "--allow-unvalidated",
+                action="store_true",
+                help="diagnose failures without a replay verdict at t_class (marked unvalidated)",
+            )
         if name == "cluster":
             dp.add_argument("--reference-run", default=None)
         if name == "replay":
@@ -888,7 +901,8 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "corrupt":
             dp.add_argument(
                 "--arm",
-                required=True,
+                action="append",
+                default=None,
                 choices=[
                     "reference",
                     "system",
@@ -898,6 +912,7 @@ def build_parser() -> argparse.ArgumentParser:
                     "corrupt_why",
                     "corrupt_how",
                 ],
+                help="render only these arms (repeatable); tables are written for every arm",
             )
             dp.add_argument("--seed", type=int, required=True)
         dp.set_defaults(func=func)

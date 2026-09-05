@@ -12,7 +12,7 @@ from ahd.diagnosis.align import align
 from ahd.diagnosis.cluster import cluster
 from ahd.diagnosis.leakage import probe
 from ahd.diagnosis.llm import DiagnosisLLM, MalformedModelOutput, parse_json_object
-from ahd.diagnosis.schema import identifier_tokens
+from ahd.diagnosis.schema import identifier_tokens, load_causes
 from ahd.diagnosis.signal import load_prompts, reference_signal, system_signal
 from ahd.errors import TaskFailure
 from ahd.harness.components import ComponentManifest
@@ -24,6 +24,7 @@ from tests.conftest import REPO_ROOT
 from tests.diag_fixtures import diagnosis, finish, trajectory
 from tests.evobench_fixtures import FAKE_REVISION
 
+VOCAB = load_causes(REPO_ROOT / "configs" / "prompts" / "diagnosis" / "causes.yaml")
 LIST: tuple[str, dict[str, Any]] = ("todo_list_tasks", {})
 UPDATE: tuple[str, dict[str, Any]] = (
     "todo_update_task",
@@ -91,6 +92,7 @@ def test_reference_signal_uses_candidates_and_records_provenance(
         manifest=manifest,
         llm=DiagnosisLLM(FakeProvider(reply)),
         prompt_template=prompts["reference_signal"],
+        vocabulary=VOCAB,
     )
     assert d.where.component == "completion_policy" and d.where.step == 2 and d.where.rule == "R3"
     assert (
@@ -125,8 +127,9 @@ def test_reference_signal_uses_candidates_and_records_provenance(
             manifest=manifest,
             llm=DiagnosisLLM(FakeProvider(_answer("tool_shell"))),
             prompt_template=prompts["reference_signal"],
+            vocabulary=VOCAB,
         )
-    with pytest.raises(TaskFailure, match="cause_label"):
+    with pytest.raises(TaskFailure, match="not in the vocabulary"):
         reference_signal(
             task,
             failed_trajectory=failed,
@@ -141,6 +144,7 @@ def test_reference_signal_uses_candidates_and_records_provenance(
             manifest=manifest,
             llm=DiagnosisLLM(FakeProvider(_answer("verifier", cause_label="made_up"))),
             prompt_template=prompts["reference_signal"],
+            vocabulary=VOCAB,
         )
 
 
@@ -159,6 +163,7 @@ def test_system_signal(manifest: ComponentManifest, taskset: TaskSet) -> None:
         manifest=manifest,
         llm=DiagnosisLLM(FakeProvider(_answer("completion_policy", step=2))),
         prompt_template=prompts["system_signal"],
+        vocabulary=VOCAB,
     )
     assert (
         d.source == "system"
@@ -203,3 +208,24 @@ def test_leakage_probe(manifest: ComponentManifest) -> None:
     )
     eligible = [c for c in manifest.components if c.patchable and c.where_eligible]
     assert report.chance_top1 == pytest.approx(1 / len(eligible))
+
+
+def test_other_cause_label_is_accepted(manifest: ComponentManifest, taskset: TaskSet) -> None:
+    task = taskset.by_id("claw-T000_synthetic")
+    failed = trajectory([[LIST], "all done"])
+    prompts = load_prompts(REPO_ROOT / "configs" / "prompts" / "diagnosis")
+    reply = _answer("completion_policy", cause_label="other: judge misread the rubric", step=2)
+    d = system_signal(
+        task,
+        failed_trajectory=failed,
+        exit_reason="assistant_no_tool_call",
+        score_reason="x",
+        replicate="r1",
+        attempt=1,
+        harness_snapshot_id="snap",
+        manifest=manifest,
+        llm=DiagnosisLLM(FakeProvider(reply)),
+        prompt_template=prompts["system_signal"],
+        vocabulary=VOCAB,
+    )
+    assert d.why.cause_label == "other:judge misread the rubric"

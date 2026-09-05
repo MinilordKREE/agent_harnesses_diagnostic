@@ -22,7 +22,7 @@ from pydantic import Field
 from ahd.core.config import StrictModel
 from ahd.core.hashing import JsonValue, to_json_value
 
-type ActionClass = Literal["shell_ro", "shell_mut", "tool", "finish", "final"]
+type ActionClass = Literal["shell_ro", "shell_mut", "shell_opaque", "tool", "finish", "final"]
 type DivergenceType = Literal[
     "different_action",
     "missing_mutation",
@@ -52,6 +52,13 @@ _MUTATING_SHELL = re.compile(
     r"git (?:add|commit|checkout|reset|apply)|pip install|npm install|apt(?:-get)?|"
     r"sed\s+-i|perl\s+-i|python3?\s+-c\s+.*\bopen\(.*['\"]w|curl\s+.*-o|wget)\b"
 )
+_OPAQUE_SHELL = re.compile(
+    r"(?:^|[\s;&|(])(?:python[0-9.]*|node|ruby|perl|php|Rscript|bash|sh|zsh|soffice|libreoffice|"
+    r"pandoc|ffmpeg|convert|make)(?=\s|$)|(?:^|[\s;&|(])\.?/?[\w./-]+\.(?:sh|py|js|rb|pl)(?=\s|$)"
+)
+"""Interpreters, scripts and converters: whether they write files cannot be read off the
+command line (owner decision, M3.1). Aligned by normalised command; mutation is observed at
+replay from the workspace tree hash (``mutating_observed``)."""
 _READ_ONLY_TOOL = re.compile(r"^(?:[a-z0-9]+_)?(list|get|search|read|fetch|show|find|query)(?:_|$)")
 
 
@@ -130,7 +137,11 @@ def shell_targets(command: str) -> tuple[str, ...]:
 
 
 def classify_shell(command: str) -> ActionClass:
-    return "shell_mut" if _MUTATING_SHELL.search(command) else "shell_ro"
+    if _MUTATING_SHELL.search(command):
+        return "shell_mut"
+    if _OPAQUE_SHELL.search(command):
+        return "shell_opaque"
+    return "shell_ro"
 
 
 def _arguments(raw: Any) -> dict[str, JsonValue]:
@@ -180,9 +191,12 @@ def actions_from_trajectory(trajectory: dict[str, Any]) -> tuple[StepActions, ..
             if name == "run_shell_command":
                 command = normalise_command(str(args.get("command", "")))
                 klass = classify_shell(command)
-                identity = (
-                    f"{klass}:{','.join(shell_targets(command))}" if klass == "shell_mut" else klass
-                )
+                if klass == "shell_mut":
+                    identity = f"{klass}:{','.join(shell_targets(command))}"
+                elif klass == "shell_opaque":
+                    identity = f"{klass}:{command}"
+                else:
+                    identity = klass
                 exact = f"shell:{command}"
             elif name == "finish":
                 answer = re.sub(r"\s+", " ", str(args.get("answer", ""))).strip().lower()
@@ -217,6 +231,10 @@ def _exact_key(actions: Sequence[Action]) -> tuple[str, ...]:
     return tuple(a.exact for a in actions)
 
 
+def _has_opaque(actions: Sequence[Action]) -> bool:
+    return any(a.klass == "shell_opaque" for a in actions)
+
+
 def _has_mutation(actions: Sequence[Action]) -> bool:
     return any(
         a.klass == "shell_mut" or (a.klass == "tool" and not _READ_ONLY_TOOL.match(a.name))
@@ -241,9 +259,10 @@ def _divergence_type(
         return kind, "the failed run stopped while the reference continued"
     if r_final and not f_final:
         return "late_finish", "the reference finished here; the failed run kept acting"
-    if _has_mutation(reference) and not _has_mutation(failed):
+    opaque = _has_opaque(failed) or _has_opaque(reference)  # mutation unknown from the command
+    if not opaque and _has_mutation(reference) and not _has_mutation(failed):
         return "missing_mutation", "the reference changed state here; the failed run only inspected"
-    if _has_mutation(failed) and not _has_mutation(reference):
+    if not opaque and _has_mutation(failed) and not _has_mutation(reference):
         return "extra_mutation", "the failed run changed state where the reference only inspected"
     if step == 1:
         return "early", "the very first actions differ"

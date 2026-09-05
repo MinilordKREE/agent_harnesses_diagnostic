@@ -204,11 +204,13 @@ def test_claw_failure_reference_alignment_replay_and_corruption(tmp_path: Path) 
         instrument_snapshot_id=instrument.snapshot_id,
     )
     assert clusters.clusters
-    for arm in ("reference", "system", "corrupt_where_near", "corrupt_where_far"):
-        _table, rendered = corrupt_run(run_dir, arm=arm, seed=0, manifest=components)
+    arms = ("reference", "system", "corrupt_where_near", "corrupt_where_far")
+    results = corrupt_run(run_dir, seed=0, manifest=components, arms=arms)
+    for arm, (_table, rendered) in results.items():
         for item in rendered:
             text = item.rendered.text if item.rendered else f"IMPOSSIBLE: {item.impossible}"
             print(f"[diag] --- {arm} / {item.cluster_id} ---\n{text}")
+    print(f"[diag] failure types: {json.dumps(clusters.failure_type_counts)}")
     report = leakage_run(
         run_dir,
         manifest=components,

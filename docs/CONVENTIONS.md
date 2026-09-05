@@ -246,6 +246,17 @@ never a 0.
 - Rendered diagnoses share one `RenderBudget` per study; field lengths and placeholder counts
   are recorded next to the text.
 - Cluster membership is hashed into the manifest (`diagnosis.clusters_sha256`, manifest v4).
+- **M3.1.** Every replayed failure carries a `failure_type` (deterministic / stochastic /
+  unrepairable / unreplayable) and an `oracle_step_basis` (sufficient / manifestation /
+  unvalidated); unrepairable and unreplayable failures never enter oracle arms. Shell actions
+  have a third class `shell_opaque`; mutation truth comes from the workspace tree hash at replay.
+  WHY labels are drawn from `configs/prompts/diagnosis/causes.yaml` (or `other:<text>`).
+  Rendering has no filler: per-cluster caps from the longest arm, lengths recorded.
+- **Judge retries (M3.1).** A repeated identical judge request within one scoring is a
+  caller-side retry (claw-eval's `LLMJudge`) and gets a `|retry:<n>` cache-scope salt: retries
+  are real calls. When claw-eval exhausts its retries on an assistant reply it cannot grade,
+  the rollout is `TaskFailure(kind="empty_answer")` with the deterministic part of the Claw
+  score (`ahd.tasks.claw.partial_score`); `grader_error` stays infra for real exceptions.
 
 ## Run directory
 

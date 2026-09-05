@@ -163,3 +163,33 @@ def test_patched_claw_judge_with_real_claw_eval() -> None:
     assert result.reasoning == "half"
     assert provider.requests[0].attribution.arm == "judge"
     assert provider.requests[0].max_tokens == 8192
+
+
+def test_identical_requests_get_a_retry_salt() -> None:
+    """claw-eval re-sends the same judge prompt on a parse failure; each repeat must be a real
+    call with its own cache key, and the repeat count is visible to the scorer."""
+    from ahd.core.config import JudgeConfig
+    from ahd.llm.fake import FakeProvider
+
+    provider = FakeProvider("not json")
+    judge = AhdJudgeClient(provider, config=JudgeConfig(), api_base="https://x", seed=0).bind(
+        unit_id="t", cache_scope="artifact:abc"
+    )
+    messages = [{"role": "user", "content": "grade this"}]
+    for _ in range(3):
+        judge.create(messages=messages)
+    judge.create(messages=[{"role": "user", "content": "something else"}])
+    scopes = [r.cache_scope for r in judge.requests]
+    assert scopes == [
+        "artifact:abc",
+        "artifact:abc|retry:1",
+        "artifact:abc|retry:2",
+        "artifact:abc",
+    ]
+    assert judge.max_retry_index == 2
+    assert judge.responses == ["not json"] * 4
+    keys = {r.cache_payload()["cache_scope"] for r in judge.requests[:3]}
+    assert len(keys) == 3  # three distinct cache keys
+    fresh = judge.bind(unit_id="t2", cache_scope="artifact:def")
+    fresh.create(messages=messages)
+    assert fresh.max_retry_index == 0 and fresh.requests[-1].cache_scope == "artifact:def"

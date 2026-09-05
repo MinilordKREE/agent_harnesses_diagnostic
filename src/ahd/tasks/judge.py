@@ -32,6 +32,7 @@ from typing import Any
 from openai.types.chat import ChatCompletion
 
 from ahd.core.config import JudgeConfig, StrictModel
+from ahd.core.hashing import sha256_of
 from ahd.errors import InfraError
 from ahd.llm.provider import Provider
 from ahd.llm.types import Attribution, ChatMessage, ChatRequest, ChatResponse
@@ -115,6 +116,14 @@ class AhdJudgeClient:
             timeout_seconds=int(config.timeout_s),
         )
         self.requests: list[ChatRequest] = []
+        self.responses: list[str] = []
+        """Reply contents, in call order (shared with bound copies like ``requests``)."""
+        self._repeats: dict[str, int] = {}
+        """Per bound client: how often an identical request was already sent. A repeat is a
+        caller-side retry (claw-eval's ``LLMJudge`` re-sends the same messages up to five
+        times); it gets a ``|retry:<n>`` cache-scope salt so it is a real call, not a cache hit
+        (owner decision, M3.1)."""
+        self.max_retry_index = 0
 
     def bind(self, *, unit_id: str, cache_scope: str | None) -> AhdJudgeClient:
         """A copy attributed to one task and one artifact hash. Shares the provider."""
@@ -128,6 +137,7 @@ class AhdJudgeClient:
             cache_scope=cache_scope,
         )
         bound.requests = self.requests
+        bound.responses = self.responses
         return bound
 
     @property
@@ -162,9 +172,19 @@ class AhdJudgeClient:
                 f"caller asked for temperature {temperature}; judge is fixed to "
                 f"{self.config.temperature}"
             )
+        chat_messages = tuple(_to_chat_message(m) for m in messages)
+        key = sha256_of(
+            {"messages": [m.model_dump() for m in chat_messages], "max_tokens": max_tokens}
+        )
+        repeat = self._repeats.get(key, 0)
+        self._repeats[key] = repeat + 1
+        self.max_retry_index = max(self.max_retry_index, repeat)
+        scope = self._cache_scope
+        if repeat:
+            scope = f"{scope or ''}|retry:{repeat}"
         request = ChatRequest(
             model=self.config.model,
-            messages=tuple(_to_chat_message(m) for m in messages),
+            messages=chat_messages,
             temperature=self.config.temperature,
             seed=self._seed,
             max_tokens=max_tokens or self._judge.max_tokens,
@@ -172,10 +192,11 @@ class AhdJudgeClient:
             timeout_s=self._judge.timeout_s,
             use_cache=self._judge.use_cache,
             attribution=Attribution(arm=JUDGE_ARM, unit_id=self._unit_id),
-            cache_scope=self._cache_scope,
+            cache_scope=scope,
         )
         self.requests.append(request)
         response = self._provider.complete(request)
+        self.responses.append(response.content)
         return to_chat_completion(response, model=self.config.model)
 
 

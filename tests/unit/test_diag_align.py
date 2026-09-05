@@ -134,3 +134,31 @@ def test_actions_from_trajectory_identity_keys() -> None:
     assert [a.klass for a in first] == ["tool", "tool"]
     assert first[0].identity == 'todo_update_task:{"task_id": "todo_001"}'
     assert steps[1].actions[0].klass == "final"
+
+
+def test_opaque_shell_class() -> None:
+    assert classify_shell("python3 build.py --out outputs/report.xlsx") == "shell_opaque"
+    assert classify_shell("python3 -m openpyxl_tool") == "shell_opaque"
+    assert classify_shell("bash run.sh") == "shell_opaque"
+    assert classify_shell("./scripts/make.sh") == "shell_opaque"
+    assert (
+        classify_shell("cat data.csv | python3 -c 'import sys; print(sys.stdin.read())'")
+        == "shell_opaque"
+    )
+    assert classify_shell("soffice --headless --convert-to pdf report.docx") == "shell_opaque"
+    assert classify_shell("python3 x.py > out.txt") == "shell_mut"  # explicit redirection wins
+    assert classify_shell("ls -la && grep -n foo notes.txt") == "shell_ro"
+    assert classify_shell("shred file") == "shell_ro"  # `sh` must match as a word, not a prefix
+
+
+def test_opaque_alignment_compares_normalised_commands() -> None:
+    same = [[LIST], [sh("python3 build.py")], [finish("x")]]
+    assert _align(same, same).candidates == ()
+    other = [[LIST], [sh("python3 build.py --fast")], [finish("x")]]
+    a = _align(same, other)
+    assert a.candidates[0].step == 2 and a.candidates[0].divergence == "different_action"
+    # opaque on one side suppresses the mutation rules: no missing/extra_mutation verdicts
+    b = _align(
+        [[LIST], [sh("python3 inspect.py")], [finish("x")]], [[LIST], [UPDATE], [finish("x")]]
+    )
+    assert b.candidates[0].divergence == "different_action"

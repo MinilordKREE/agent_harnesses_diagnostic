@@ -11,6 +11,7 @@ Task prompt (as the failed run saw it):
 {task_prompt}
 
 Divergence step: {step} ({divergence_type}: {divergence_note})
+Failure type: {failure_type} (oracle step basis: {oracle_step_basis}). {failure_type_note}.
 Failed run's action at that step:
 {failed_action}
 Reference action at that step:
@@ -28,7 +29,9 @@ it is {rule_id}: {rule_note}):
 
 Answer with a single JSON object with these keys:
 - "severity": one of "low", "medium", "high", "critical"
-- "cause_label": one of {cause_labels}
+- "cause_label": exactly one id from this controlled vocabulary (or `other:<short text>` only
+  when none fits):
+{cause_labels}
 - "mechanism": one or two sentences explaining the mechanism by which the harness produced the
   divergent action; describe behaviour, not file names
 - "fix_hint": one sentence describing what the harness should do differently

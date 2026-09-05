@@ -13,7 +13,13 @@ from ahd.core.context import create_run_context
 from ahd.core.trace import TraceWriter
 from ahd.diagnosis.align import Alignment, align
 from ahd.diagnosis.pipeline import instrument_snapshot
-from ahd.diagnosis.replay import Replayer, prefix_payload, reference_message_at
+from ahd.diagnosis.replay import (
+    Replayer,
+    classify,
+    manifestation_step,
+    prefix_payload,
+    reference_message_at,
+)
 from ahd.harness.components import ComponentManifest
 from ahd.harness.snapshot import HarnessSnapshot, SnapshotStore, snapshot_from_dir
 from ahd.llm.fake import FakeProvider
@@ -41,6 +47,10 @@ LIST: tuple[str, dict[str, Any]] = ("todo_list_tasks", {})
 UPDATE: tuple[str, dict[str, Any]] = (
     "todo_update_task",
     {"task_id": "todo_001", "status": "completed"},
+)
+UPDATE_VARIANT: tuple[str, dict[str, Any]] = (
+    "todo_update_task",
+    {"task_id": "todo_001", "priority": "high"},
 )
 TASK = "bc-en-0001"
 
@@ -70,7 +80,7 @@ def test_prefix_payload_boundary_and_flags() -> None:
     )
     assert payload["resume_step"] == 4 and payload["arm"] == "substitute"
     assert [a["step"] for a in payload["prefix_actions"]] == [1, 2, 3]
-    assert [a["mutating"] for a in payload["prefix_actions"]] == [False, True, False]
+    assert [a["mutating_prior"] for a in payload["prefix_actions"]] == [False, True, False]
     assert [a["quoted"] for a in payload["prefix_actions"]] == [True, False, False]
     assert payload["prefix_actions"][1]["recorded_output"]["exit_code"] == 0
     # messages: system, user, then (assistant, tool) x 3 = 8, cut before the 4th assistant message
@@ -303,9 +313,7 @@ def test_sufficient_candidate_and_bookkeeping(setup: Setup, taskset: TaskSet) ->
     assert isinstance(report, dict) and report["status"] == "ok"
 
 
-def test_economize_skips_control_when_substitute_insufficient(
-    setup: Setup, taskset: TaskSet
-) -> None:
+def test_economize_runs_one_control_arm_only_to_classify(setup: Setup, taskset: TaskSet) -> None:
     failed, reference, alignment = _pair()
     setup.worker.outcomes.update({("substitute", 1): "fail", ("substitute", 2): "fail"})
     result = setup.replayer(k=3).validate(
@@ -319,9 +327,34 @@ def test_economize_skips_control_when_substitute_insufficient(
     )
     setup.trace.close()
     c = result.candidates[0]
-    assert c.status == "insufficient" and c.control.skipped and c.substitute.passed == 1
-    assert result.oracle_status == "unvalidated" and result.oracle_step is None
-    assert len(setup.worker.requests) == 3
+    assert c.status == "insufficient" and c.substitute.passed == 1
+    # economize skipped the control arm; with no sufficient step one control arm runs so the
+    # failure can be classified (control passes 3/3 here -> stochastic)
+    assert c.classification_control and not c.control.skipped and c.control.passed == 3
+    assert result.failure_type == "stochastic"
+    assert result.oracle_step == 3 and result.oracle_step_basis == "manifestation"
+    assert result.manifestation_step == 3 and result.oracle_status == "validated"
+    assert len(setup.worker.requests) == 6
+
+
+def test_unrepairable_when_both_arms_fail(setup: Setup, taskset: TaskSet) -> None:
+    failed, reference, alignment = _pair()
+    setup.worker.outcomes.update(
+        {("substitute", i): "fail" for i in (1, 2, 3)} | {("control", i): "fail" for i in (1, 2, 3)}
+    )
+    result = setup.replayer(k=3).validate(
+        taskset.by_id(TASK),
+        failed_trajectory=failed,
+        reference_trajectory=reference,
+        alignment=alignment,
+        replicate="r1",
+        attempt=1,
+        recorded_workspace=None,
+    )
+    setup.trace.close()
+    assert result.failure_type == "unrepairable"
+    assert result.oracle_step is None and result.oracle_step_basis == "unvalidated"
+    assert result.candidates[0].classification_control
 
 
 def test_full_arms_and_control_failure(setup: Setup, taskset: TaskSet) -> None:
@@ -341,6 +374,8 @@ def test_full_arms_and_control_failure(setup: Setup, taskset: TaskSet) -> None:
     setup.trace.close()
     c = result.candidates[0]
     assert c.status == "insufficient" and not c.control.skipped and c.control.passed == 2
+    assert not c.classification_control
+    assert result.failure_type == "stochastic" and result.oracle_step_basis == "manifestation"
 
 
 def test_unreplayable_prefix(setup: Setup, taskset: TaskSet) -> None:
@@ -358,7 +393,7 @@ def test_unreplayable_prefix(setup: Setup, taskset: TaskSet) -> None:
     setup.trace.close()
     c = result.candidates[0]
     assert c.status == "unreplayable" and c.substitute.unreplayable == 3 and c.control.skipped
-    assert result.oracle_status == "unvalidated"
+    assert result.oracle_status == "unvalidated" and result.failure_type == "unreplayable"
     assert all(r.status == "unreplayable" for r in c.substitute.rollouts)
     rows = read_ledger(setup.ledger.path) if setup.ledger.path.exists() else []
     assert not [r for r in rows if r.event == "policy"]  # nothing to bill: no model call happened
@@ -387,3 +422,14 @@ def test_unscored_rollouts_count_against_sufficiency(setup: Setup, taskset: Task
     c = result.candidates[0]
     assert c.substitute.pass_fraction == pytest.approx(2 / 3)
     assert c.control.conservative_pass_fraction == pytest.approx(1 / 3) and c.status == "sufficient"
+
+
+def test_manifestation_step_is_the_last_class_candidate() -> None:
+    failed = trajectory([[LIST], [UPDATE_VARIANT], [LIST], [finish("x")]])
+    reference = trajectory([[LIST], [UPDATE], [UPDATE], [finish("x")]])
+    alignment = align(failed, reference, task_id=TASK, failed_exit_reason="finished")
+    assert [c.divergence for c in alignment.candidates] == ["missing_mutation", "argument_variant"]
+    assert manifestation_step(alignment) == 3  # not the argument variant at step 2
+    empty = align(failed, failed, task_id=TASK, failed_exit_reason="finished")
+    assert manifestation_step(empty) is None
+    assert classify(()) == "unreplayable"

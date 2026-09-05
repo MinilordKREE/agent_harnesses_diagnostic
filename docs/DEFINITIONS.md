@@ -69,12 +69,54 @@ results are compared on stdout and stderr (never on duration). Read-only differe
 warnings.
 Unreplayable is a status, never a verdict.
 
+## Failure type (M3.1)
+
+Replay validation classifies every failure (owner decision, M3.1):
+
+| failure_type | evidence | oracle step |
+|---|---|---|
+| `deterministic` | some candidate is sufficient (substitute ≥ 2/3, control ≤ 1/3) | earliest sufficient step, `oracle_step_basis: sufficient` |
+| `stochastic` | no sufficient step and the control arm passes (> 1/3) at every tested candidate: re-sampling from the prefix recovers, the failure was a policy-level random event that the harness let through | the **manifestation step**, i.e. the last class candidate (`no_tool_call`, `premature_finish`, `late_finish`, `error`, `budget` or the last differing action), `oracle_step_basis: manifestation`; the component follows the rule table for that candidate (R3 to R6 in practice) |
+| `unrepairable` | at some candidate both arms fail and no candidate is sufficient | none; excluded from oracle arms |
+| `unreplayable` | no arm could be scored (prefix drift, infra) | none; excluded from oracle arms |
+
+When `economize` skipped every control arm, one control arm is run at the first insufficient
+candidate purely to classify (`classification_control: true`). The distribution of failure
+types per source is an E0 finding in its own right. Excluded failures still get a SYSTEM-arm
+diagnosis. `ahd diag signal` refuses failures without a replay verdict unless
+`--allow-unvalidated` (then `oracle_step_basis: unvalidated`, step = `t_class`).
+
+## Opaque shell actions (M3.1)
+
+A shell command that runs an interpreter, a script or a converter (`python3 build.py`,
+`bash run.sh`, `soffice --convert-to`) is class `shell_opaque`: whether it writes files
+cannot be read off the command line. Alignment compares opaque actions by normalised command
+and does not derive `missing_mutation` / `extra_mutation` when either side is opaque. The
+ground truth of mutation is observed at replay: the instrument hashes the workspace tree before
+and after every prefix shell action (`mutating_observed`), and the drift rule uses that flag,
+not the regex prior (`mutating_prior`).
+
+## Cause vocabulary (M3.1)
+
+WHY labels come from `configs/prompts/diagnosis/causes.yaml` (15 ids seeded from
+HarnessEvolve's examples, Harness-Bench's failure modes and HarnessFix's layered view) or the
+escape hatch `other:<short text>`; the model may not invent labels. Clustering keys on the
+label.
+
 ## Clusters
 
 Failures are grouped by (cause label, WHERE component). The representative is the member with
 the highest severity, then the earliest oracle step. Single-member clusters are kept
 (HarnessEvolve §3.4: "Preserve single-member clusters"). Membership is hashed into the run
 manifest (`diagnosis.clusters_sha256`).
+
+## Rendering (M3.1)
+
+No filler. For each cluster and field the cap is the longest identifier-stripped text among
+the arms of that seed; longer texts are trimmed at a word boundary, shorter ones are left as
+they are. Character counts per field per arm are written to the assignment table
+(`rendered_lengths`) and to `rendered.json`; the caps to `caps.json`. Length is analysed as a
+covariate in M6.
 
 ## Corruption and distance
 

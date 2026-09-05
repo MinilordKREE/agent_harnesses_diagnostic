@@ -53,6 +53,9 @@ class Assignment(StrictModel):
     impossible: str | None = None
     excluded: tuple[str, ...] = ()
     """Values ruled out by coincidence exclusion (components or cluster ids)."""
+    rendered_lengths: dict[str, int] | None = None
+    """Characters per rendered field (after stripping and capping); filled in after rendering
+    and re-written to the table so length is available as a covariate (owner decision, M3.1)."""
 
 
 class AssignmentTable(StrictModel):

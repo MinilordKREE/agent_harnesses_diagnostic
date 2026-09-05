@@ -30,6 +30,7 @@ from ahd.core.config import StrictModel
 from ahd.core.hashing import JsonValue, to_json_value
 from ahd.core.io import atomic_write_text, read_json
 from ahd.diagnosis.align import _READ_ONLY_TOOL, Alignment, Candidate, as_dict, classify_shell
+from ahd.diagnosis.schema import FailureType, OracleBasis
 from ahd.harness.snapshot import HarnessSnapshot
 from ahd.runner.records import RolloutRecord
 from ahd.runner.runner import Runner
@@ -86,6 +87,8 @@ class CandidateReplay(StrictModel):
     control: ArmResult
     status: CandidateStatus
     usd: float
+    classification_control: bool = False
+    """The control arm ran only to classify the failure (economize would have skipped it)."""
 
 
 class ReplayResult(StrictModel):
@@ -103,7 +106,12 @@ class ReplayResult(StrictModel):
     economize: bool
     candidates: tuple[CandidateReplay, ...]
     sufficient_set: tuple[int, ...]
+    failure_type: FailureType
+    manifestation_step: int | None
+    """The last class candidate: where the failure showed (no_tool_call, premature_finish,
+    error, budget, late_finish, or the last different action)."""
     oracle_step: int | None
+    oracle_step_basis: OracleBasis
     oracle_status: Literal["validated", "unvalidated"]
     usd: float
     drift_reports: dict[str, JsonValue] = Field(default_factory=dict)
@@ -170,11 +178,12 @@ def prefix_payload(
         name = str(call.get("name", ""))
         args = as_dict(call.get("arguments"))
         if name == "run_shell_command":
-            mutating = classify_shell(str(args.get("command", ""))) == "shell_mut"
+            klass = classify_shell(str(args.get("command", "")))
+            mutating_prior: bool | None = None if klass == "shell_opaque" else klass == "shell_mut"
         elif name == "finish":
-            mutating = False
+            mutating_prior = False
         else:
-            mutating = not _READ_ONLY_TOOL.match(name)
+            mutating_prior = not _READ_ONLY_TOOL.match(name)
         after = [t for s2, ts in later_texts.items() if s < s2 < step for t in ts]
         content = str(output.get("content", ""))
         prefix_actions.append(
@@ -188,7 +197,7 @@ def prefix_payload(
                     "exit_code": output.get("exit_code"),
                     "timeout": output.get("timeout"),
                 },
-                "mutating": mutating,
+                "mutating_prior": mutating_prior,
                 "quoted": _quoted_later(output, after),
             }
         )
@@ -252,6 +261,29 @@ def _substituted_step_failed(trajectory: dict[str, Any], step: int) -> bool:
         if isinstance(parsed, dict) and "error" in parsed and o.get("exit_code") is None:
             failed += 1
     return failed == len(outputs)
+
+
+def manifestation_step(alignment: Alignment) -> int | None:
+    classes = [c for c in alignment.candidates if c.divergence != "argument_variant"]
+    pool = classes or list(alignment.candidates)
+    return pool[-1].step if pool else None
+
+
+def classify(candidates: Sequence[CandidateReplay]) -> FailureType:
+    """Owner decision (M3.1): substitute passes and control fails at some step ->
+    deterministic; control passes at every tested step -> stochastic; both arms fail ->
+    unrepairable; nothing scorable -> unreplayable."""
+    replayed = [c for c in candidates if c.status != "skipped"]
+    if not replayed or all(c.status == "unreplayable" for c in replayed):
+        return "unreplayable"
+    if any(c.status == "sufficient" for c in replayed):
+        return "deterministic"
+    controls = [c.control for c in replayed if not c.control.skipped and c.control.scored > 0]
+    if not controls:
+        return "unreplayable"
+    if all(ctl.pass_fraction > CONTROL_MAX for ctl in controls):
+        return "stochastic"
+    return "unrepairable"
 
 
 class Replayer:
@@ -466,6 +498,48 @@ class Replayer:
                 )
             )
         sufficient_set = tuple(c.step for c in results if c.status == "sufficient")
+        if not sufficient_set and not any(
+            not c.control.skipped and c.control.scored > 0 for c in results
+        ):
+            # economize skipped every control arm: run one so the failure can be classified
+            for index, c in enumerate(results):
+                if c.status != "insufficient" or c.substitute.scored == 0:
+                    continue
+                candidate = next(x for x in alignment.candidates if x.step == c.step)
+                ctl_payload = prefix_payload(
+                    failed_trajectory,
+                    step=c.step,
+                    arm="control",
+                    substitute=None,
+                    recorded_workspace=recorded_workspace,
+                )
+                control = self._arm(
+                    task,
+                    key=key,
+                    replicate=replicate,
+                    candidate=candidate,
+                    arm="control",
+                    payload=ctl_payload,
+                    drift_reports=drift_reports,
+                )
+                results[index] = c.model_copy(
+                    update={
+                        "control": control,
+                        "classification_control": True,
+                        "usd": c.usd + sum((r.usd or 0.0) for r in control.rollouts),
+                    }
+                )
+                break
+        failure_type = classify(results)
+        manifestation = manifestation_step(alignment)
+        oracle_step: int | None
+        basis: OracleBasis
+        if failure_type == "deterministic":
+            oracle_step, basis = min(sufficient_set), "sufficient"
+        elif failure_type == "stochastic" and manifestation is not None:
+            oracle_step, basis = manifestation, "manifestation"
+        else:
+            oracle_step, basis = None, "unvalidated"
         result = ReplayResult(
             task_id=task.id,
             replicate=replicate,
@@ -481,8 +555,11 @@ class Replayer:
             economize=self.economize,
             candidates=tuple(results),
             sufficient_set=sufficient_set,
-            oracle_step=min(sufficient_set) if sufficient_set else None,
-            oracle_status="validated" if sufficient_set else "unvalidated",
+            failure_type=failure_type,
+            manifestation_step=manifestation,
+            oracle_step=oracle_step,
+            oracle_step_basis=basis,
+            oracle_status="validated" if oracle_step is not None else "unvalidated",
             usd=sum(c.usd for c in results),
             drift_reports=drift_reports,
         )

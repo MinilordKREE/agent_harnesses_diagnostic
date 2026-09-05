@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Sequence
+from pathlib import Path
 from typing import Literal
 
+import yaml
 from pydantic import Field
 
 from ahd.core.config import StrictModel
@@ -25,22 +27,59 @@ type Source = Literal["reference", "system", "shuffled", "corrupted"]
 type Corruption = Literal["none", "where", "why", "how", "all"]
 type Attribution = Literal["rule", "llm"]
 type Tier = Literal["near", "far", "any"]
+type FailureType = Literal["deterministic", "stochastic", "unrepairable", "unreplayable"]
+"""Replay-validation verdict on a failure (owner decision, M3.1): ``deterministic`` = some
+candidate step is sufficient; ``stochastic`` = re-sampling from the prefix passes at every
+tested candidate (a policy-level random event that the harness let through); ``unrepairable``
+= neither the reference action nor re-sampling rescues the run; ``unreplayable`` = no arm could
+be scored."""
+type OracleBasis = Literal["sufficient", "manifestation", "unvalidated"]
 
-CAUSE_LABELS: tuple[str, ...] = (
-    "tool_hallucination",
-    "argument_error",
-    "premature_termination",
-    "missing_verification",
-    "context_loss",
-    "wrong_target",
-    "ignored_error",
-    "over_exploration",
-    "budget_exhaustion",
-    "instruction_misread",
-    "other",
-)
-"""Closed cause taxonomy so that clustering is deterministic; the first three are the paper's
-own examples."""
+OTHER_CAUSE = re.compile(r"^other:\s*[\w][\w \-/,'.]{2,60}$")
+"""The escape hatch of the controlled vocabulary: ``other:<short text>``."""
+CAUSES_PATH = Path("configs/prompts/diagnosis/causes.yaml")
+
+
+class Cause(StrictModel):
+    id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    description: str
+    layers: tuple[str, ...] = ()
+
+
+class CauseVocabulary(StrictModel):
+    schema_version: Literal[1]
+    causes: tuple[Cause, ...] = Field(min_length=1)
+
+    def ids(self) -> tuple[str, ...]:
+        return tuple(c.id for c in self.causes)
+
+    def prompt_listing(self) -> str:
+        lines = [f"- {c.id}: {c.description}" for c in self.causes]
+        lines.append("- other:<short text>: only when none of the above fits")
+        return "\n".join(lines)
+
+    def normalise(self, label: object) -> str:
+        """The label the model returned, validated: an id, or ``other:<text>``."""
+        text = str(label or "").strip()
+        if text in self.ids():
+            return text
+        lowered = text.lower()
+        if lowered in self.ids():
+            return lowered
+        if OTHER_CAUSE.match(text):
+            return "other:" + text.split(":", 1)[1].strip().lower()
+        raise ValueError(f"cause_label {label!r} is not in the vocabulary and not other:<text>")
+
+
+def load_causes(path: Path = CAUSES_PATH) -> CauseVocabulary:
+    from ahd.core.io import read_text
+
+    try:
+        raw = yaml.safe_load(read_text(path))
+    except yaml.YAMLError as exc:
+        raise ValueError(f"invalid YAML in {path}: {exc}") from exc
+    return CauseVocabulary.model_validate(raw)
+
 
 PLACEHOLDERS: dict[str, str] = {
     "path": "[path]",
@@ -92,6 +131,10 @@ class Provenance(StrictModel):
     request_sha256: str | None
     origin_cluster: str | None = None
     """For corrupted/shuffled diagnoses: the cluster the WHY/HOW/all was taken from."""
+    failure_type: FailureType | None = None
+    oracle_step_basis: OracleBasis | None = None
+    """``sufficient``: earliest sufficient step; ``manifestation``: the last class candidate (where
+    a stochastic failure showed); ``unvalidated``: no replay ran (only with --allow-unvalidated)."""
 
 
 class Diagnosis(StrictModel):
@@ -105,12 +148,12 @@ class Diagnosis(StrictModel):
     extra: dict[str, JsonValue] = Field(default_factory=dict)
 
 
-class RenderBudget(StrictModel):
-    """Character budget per rendered field; identical across arms for the same cluster."""
+class FieldCaps(StrictModel):
+    """Per-field character caps for one cluster (owner decision, M3.1): the longest arm's
+    stripped text sets the cap, so nothing is padded and only longer texts are trimmed."""
 
-    mechanism: int = Field(default=400, ge=40)
-    fix_hint: int = Field(default=300, ge=40)
-    filler: str = "No further detail is available for this field."
+    mechanism: int = Field(ge=20)
+    fix_hint: int = Field(ge=20)
 
 
 class Rendered(StrictModel):
@@ -176,26 +219,33 @@ def strip_identifiers(text: str, tokens: dict[str, str]) -> tuple[str, dict[str,
 # ---------------------------------------------------------------- rendering
 
 
-def _fit(text: str, budget: int, filler: str) -> tuple[str, bool]:
-    """Trim at a word boundary to ``budget``; pad with a neutral filler up to 90% of it."""
+def _fit(text: str, cap: int) -> tuple[str, bool]:
+    """Collapse whitespace; trim at a word boundary to ``cap``. Never pads."""
     text = re.sub(r"\s+", " ", text).strip()
-    truncated = False
-    if len(text) > budget:
-        cut = text[:budget]
-        cut = cut[: cut.rfind(" ")] if " " in cut else cut
-        text, truncated = cut.rstrip(" ,;:") + ".", True
-    target = int(budget * 0.9)
-    while len(text) < target:
-        room = budget - len(text) - 1
-        if room < 3:
-            break
-        chunk = filler if len(filler) <= room else filler[:room]
-        if len(filler) > room and " " in chunk:
-            chunk = chunk.rsplit(" ", 1)[0]
-        if not chunk.strip():
-            break
-        text = f"{text} {chunk}"
-    return text, truncated
+    if len(text) <= cap:
+        return text, False
+    cut = text[:cap]
+    cut = cut[: cut.rfind(" ")] if " " in cut else cut
+    return cut.rstrip(" ,;:") + ".", True
+
+
+def stripped_lengths(diagnosis: Diagnosis, tokens: dict[str, str]) -> dict[str, int]:
+    """Field lengths after identifier stripping and whitespace collapse (the cap inputs)."""
+    mechanism, _ = strip_identifiers(diagnosis.why.mechanism_sentence, tokens)
+    fix_hint, _ = strip_identifiers(diagnosis.how.fix_hint, tokens)
+    return {
+        "mechanism": len(re.sub(r"\s+", " ", mechanism).strip()),
+        "fix_hint": len(re.sub(r"\s+", " ", fix_hint).strip()),
+    }
+
+
+def caps_for(diagnoses: Sequence[Diagnosis], tokens: dict[str, str]) -> FieldCaps:
+    """The cap per field is the longest stripped text among the arms of one cluster."""
+    lengths = [stripped_lengths(d, tokens) for d in diagnoses]
+    return FieldCaps(
+        mechanism=max([20, *(x["mechanism"] for x in lengths)]),
+        fix_hint=max([20, *(x["fix_hint"] for x in lengths)]),
+    )
 
 
 def render(
@@ -203,14 +253,13 @@ def render(
     template: str,
     *,
     tokens: dict[str, str],
-    budget: RenderBudget | None = None,
+    caps: FieldCaps,
 ) -> Rendered:
-    """Fill the fixed template. WHERE is rendered verbatim; WHY/HOW are stripped and fitted."""
-    budget = budget or RenderBudget()
+    """Fill the fixed template. WHERE is rendered verbatim; WHY/HOW are stripped and capped."""
     mechanism, counts_m = strip_identifiers(diagnosis.why.mechanism_sentence, tokens)
     fix_hint, counts_h = strip_identifiers(diagnosis.how.fix_hint, tokens)
-    mechanism, trunc_m = _fit(mechanism, budget.mechanism, budget.filler)
-    fix_hint, trunc_h = _fit(fix_hint, budget.fix_hint, budget.filler)
+    mechanism, trunc_m = _fit(mechanism, caps.mechanism)
+    fix_hint, trunc_h = _fit(fix_hint, caps.fix_hint)
     step = "unknown" if diagnosis.where.step is None else str(diagnosis.where.step)
     text = (
         template.replace("{component}", diagnosis.where.component)
@@ -230,14 +279,6 @@ def render(
         placeholder_counts=counts,
         truncated={"mechanism": trunc_m, "fix_hint": trunc_h},
     )
-
-
-def shared_budget(
-    diagnoses: Sequence[Diagnosis], *, base: RenderBudget | None = None
-) -> RenderBudget:
-    """One budget for a set of arms: the base budget, never larger than the base."""
-    _ = diagnoses
-    return base or RenderBudget()
 
 
 def load_template(path: str | None = None) -> str:

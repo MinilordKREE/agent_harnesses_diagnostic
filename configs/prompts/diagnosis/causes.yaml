@@ -1,0 +1,59 @@
+# Controlled cause vocabulary for WHY (owner decision, M3.1). The model must pick one `id`
+# from this list or answer `other:<short text>`; clustering keys on the label, so free text
+# would split one cause into several clusters. Long-tail protection (single-member clusters
+# kept) is unchanged.
+#
+# Seed sources, mapped by us (no text copied):
+# - HarnessEvolve (arXiv 2609.00829v1 §3.4) examples: tool hallucination, argument omission,
+#   premature termination.
+# - Harness-Bench (arXiv 2605.27922) failure modes: contract/format, tool/recovery,
+#   evidence/grounding, artifact commitment, state/continuation.
+# - HarnessFix (arXiv 2606.06324) locates failures on the ETCLOVG layers; the `layers` hint
+#   below says where a cause usually sits, it is not a constraint.
+schema_version: 1
+causes:
+  - id: contract_violation
+    description: "output protocol not followed: content-only reply where a finish call or a deliverable was required, wrong format, missing required fields"
+    layers: [lifecycle, context]
+  - id: premature_termination
+    description: "the run stopped before the task was done although it could have continued"
+    layers: [lifecycle]
+  - id: artifact_not_committed
+    description: "the work was reasoned about or drafted but the file, update or answer was never written or sent"
+    layers: [lifecycle, tooling]
+  - id: tool_hallucination
+    description: "a tool that does not exist was called, or a tool result was invented instead of read"
+    layers: [tooling, context]
+  - id: argument_error
+    description: "a real tool was called with wrong, missing or malformed arguments"
+    layers: [tooling, context]
+  - id: wrong_target
+    description: "the action was applied to the wrong entity: wrong file, id, record or time window"
+    layers: [context, verification]
+  - id: error_recovery
+    description: "a failed or timed-out step was ignored or retried without change; no effective recovery"
+    layers: [lifecycle, verification]
+  - id: ungrounded_answer
+    description: "the final answer or deliverable states facts not supported by any observation"
+    layers: [verification, context]
+  - id: insufficient_evidence
+    description: "the run stopped gathering or checking evidence too early; required information was never read"
+    layers: [lifecycle, verification]
+  - id: context_loss
+    description: "an earlier instruction or observation was forgotten or truncated away before it was needed"
+    layers: [context]
+  - id: instruction_misread
+    description: "the task, its scope or a constraint was misunderstood from the start"
+    layers: [context]
+  - id: over_exploration
+    description: "steps were spent inspecting or re-reading instead of acting, exhausting patience or budget"
+    layers: [lifecycle, governance]
+  - id: budget_exhaustion
+    description: "the step or wall-clock budget ran out before completion"
+    layers: [governance, lifecycle]
+  - id: unsafe_action
+    description: "a forbidden or destructive action was taken (deleting, overwriting, violating a safety check)"
+    layers: [governance, verification]
+  - id: state_corruption
+    description: "state was changed wrongly and later steps built on the damaged state"
+    layers: [execution, verification]

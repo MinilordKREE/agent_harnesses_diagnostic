@@ -49,6 +49,24 @@ _MASKS = [
 ]
 
 
+def _tree_hash(root: Path) -> str:
+    """sha256 over (relative path, size, content sha256) of every file under ``root``."""
+    import hashlib
+
+    digest = hashlib.sha256()
+    if not root.is_dir():
+        return digest.hexdigest()
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        rel = path.relative_to(root).as_posix()
+        try:
+            data = path.read_bytes()
+        except OSError:
+            data = b"<unreadable>"
+        digest.update(f"{rel}\x00{len(data)}\x00".encode())
+        digest.update(hashlib.sha256(data).hexdigest().encode())
+    return digest.hexdigest()
+
+
 def _comparable(output: dict) -> str:
     """The part of a tool result that can be compared across runs: stdout+stderr for shell
     results (never ``duration_seconds``), the content string for everything else."""
@@ -84,19 +102,26 @@ def _replay_prefix(replay: dict, state: RolloutState, components: HarnessCompone
     for item in replay.get("prefix_actions", []):
         action = Action(tool_call_id=str(item.get("tool_call_id", "")), name=str(item["name"]),
                         arguments=dict(item.get("arguments") or {}))
+        before = _tree_hash(state.workspace) if action.name == "run_shell_command" else None
         result = components.router.execute(action, state, command_timeout=command_timeout_seconds,
                                            remaining_seconds=None)
         recorded = item.get("recorded_output") or {}
         fresh_exit, recorded_exit = result.get("exit_code"), recorded.get("exit_code")
         fresh_text = _mask(_comparable(result), extra_masks, str(state.workspace))
         recorded_text = _mask(_comparable(recorded), extra_masks, str(state.workspace))
-        entry = {"step": item.get("step"), "name": action.name, "mutating": bool(item.get("mutating")),
-                 "quoted": bool(item.get("quoted")), "exit_code": [recorded_exit, fresh_exit],
-                 "output_equal": fresh_text == recorded_text}
+        prior = item.get("mutating_prior")
+        if action.name == "run_shell_command":
+            # ground truth: did the workspace tree change? (owner decision, M3.1)
+            observed = _tree_hash(state.workspace) != before
+        else:
+            observed = bool(prior)  # injected tools: mutation lives in the mock service
+        entry = {"step": item.get("step"), "name": action.name, "mutating_prior": prior,
+                 "mutating_observed": observed, "quoted": bool(item.get("quoted")),
+                 "exit_code": [recorded_exit, fresh_exit], "output_equal": fresh_text == recorded_text}
         if action.name == "run_shell_command" and fresh_exit != recorded_exit:
             entry["reason"] = "exit_code_differs"
             drifts.append(entry)
-        elif fresh_text != recorded_text and (entry["mutating"] or entry["quoted"]):
+        elif fresh_text != recorded_text and (observed or entry["quoted"]):
             entry["reason"] = "mutating_or_quoted_output_differs"
             drifts.append(entry)
         elif fresh_text != recorded_text:
