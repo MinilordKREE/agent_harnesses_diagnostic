@@ -1,0 +1,3 @@
+[submodule "third_party/evo-bench"]
+	path = third_party/evo-bench
+	url = https://github.com/RUCAIBox/Evo-Bench

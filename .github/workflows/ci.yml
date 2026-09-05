@@ -1,0 +1,31 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Sync locked environment
+        run: uv sync --locked
+      - name: Lint
+        run: uv run ruff check .
+      - name: Format check
+        run: uv run ruff format --check .
+      - name: Type check
+        run: uv run mypy
+      - name: Unit tests (offline)
+        run: uv run pytest
+        env:
+          # Unit tests must never need a real key; this makes an accidental live call fail fast.
+          DEEPSEEK_API_KEY: ci-not-a-real-key

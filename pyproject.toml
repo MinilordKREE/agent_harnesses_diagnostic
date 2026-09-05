@@ -1,0 +1,77 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ahd"
+version = "0.1.0"
+description = "Agent harnesses diagnostic: reproducible LLM/agent-harness experiments"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "datasets>=5.0.1",
+  "evo-bench",
+  "openai>=1.50",
+  "pydantic>=2.7",
+  "pydantic-settings>=2.3",
+  "pyyaml>=6.0",
+]
+
+[project.scripts]
+ahd = "ahd.cli:main"
+
+[dependency-groups]
+dev = [
+  "mypy>=1.11",
+  "pre-commit>=3.7",
+  "pytest>=8.2",
+  "ruff>=0.6",
+  "types-pyyaml>=6.0",
+]
+
+[tool.uv]
+# Evo-Bench pins openai<3; the chat-completions calls it makes are unchanged in 3.x.
+# Verified by tests/integration/test_evobench_live.py (real judge call through its client).
+override-dependencies = ["openai>=3"]
+
+[tool.uv.sources]
+evo-bench = { path = "third_party/evo-bench", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ahd"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+extend-exclude = ["third_party"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "N", "SIM", "RUF", "T20", "PTH", "RET", "ERA"]
+ignore = ["RUF012"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/ahd/cli.py" = ["T201"]
+"tests/**" = ["T201"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["ahd"]
+
+[tool.mypy]
+python_version = "3.12"
+plugins = ["pydantic.mypy"]
+strict = true
+files = ["src", "tests"]
+warn_unreachable = true
+pretty = true
+
+[[tool.mypy.overrides]]
+module = ["evobench.*", "claw_eval.*", "datasets.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q -m 'not integration'"
+markers = [
+  "integration: hits the real DeepSeek endpoint; needs DEEPSEEK_API_KEY; run with `make test-integration`",
+]

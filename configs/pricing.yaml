@@ -1,0 +1,42 @@
+# DeepSeek list prices, USD per 1M tokens.
+# Source: https://api-docs.deepseek.com/quick_start/pricing (fetched 2026-09-04; the page
+# carries no effective date of its own). The zh-cn page gives the same table in CNY and
+# defines peak as Beijing time Mon-Fri 09:00-12:00 and 14:00-18:00, which is the UTC
+# schedule below. Off-peak is exactly half of peak.
+# Model snapshots at fetch time: DeepSeek-V4-Flash-0731, DeepSeek-V4-Pro-0813.
+# Bump pricing_version whenever any number here changes; ledger rows record it.
+pricing_version: "2026-09-04.1"
+as_of: 2026-09-04
+source: https://api-docs.deepseek.com/quick_start/pricing
+currency: USD
+unit: per_1m_tokens
+peak:
+  description: "Monday-Friday 01:00-04:00 and 06:00-10:00 UTC; window start inclusive, end exclusive"
+  weekdays: [0, 1, 2, 3, 4]   # Monday=0 ... Friday=4
+  utc_windows:
+    - ["01:00", "04:00"]
+    - ["06:00", "10:00"]
+models:
+  deepseek-v4-flash:
+    peak:     {input_cache_hit: 0.014, input_cache_miss: 0.44, output: 1.32}
+    off_peak: {input_cache_hit: 0.007, input_cache_miss: 0.22, output: 0.66}
+  deepseek-v4-pro:
+    peak:     {input_cache_hit: 0.044, input_cache_miss: 1.32, output: 3.96}
+    off_peak: {input_cache_hit: 0.022, input_cache_miss: 0.66, output: 1.98}
+  deepseek-v4-flash-vision-exp:
+    peak:     {input_cache_hit: 0.014, input_cache_miss: 0.44, output: 1.32}
+    off_peak: {input_cache_hit: 0.007, input_cache_miss: 0.22, output: 0.66}
+
+# Web-search providers: an environment-interaction cost, priced per query, own version.
+search:
+  serper:
+    usd_per_query: 0.001
+    credits_per_query: 1
+    note: >-
+      Starter pack USD 50 for 50,000 credits (USD 1.00 per 1,000 queries); one credit per query
+      returning up to 10 results, two credits for 11-100 results; larger packs go down to
+      USD 0.30 per 1,000. Free tier 2,500 credits. serper.dev/pricing was not fetchable on
+      2026-09-05; verify the tier actually purchased in the Serper dashboard.
+    pricing_version: "2026-09-05.1"
+    as_of: 2026-09-05
+    source: "https://serper.dev (free tier); tier prices via https://coldiq.com/blog/serper-pricing"
