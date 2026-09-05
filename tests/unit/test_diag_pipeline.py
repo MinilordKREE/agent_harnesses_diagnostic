@@ -348,7 +348,7 @@ def test_pipeline_end_to_end(
     assert len(clusters.clusters) == 3 and all(len(c.members) == 1 for c in clusters.clusters)
     block = read_manifest(run / "manifest.json").diagnosis
     assert block is not None and block["clusters_sha256"] == clusters.membership_sha256
-    assert read_manifest(run / "manifest.json").schema_version == 4
+    assert read_manifest(run / "manifest.json").schema_version == 5
     assert activity.tool_names == ("todo_list_tasks",)
     loaded, _ = load_clusters(run)
     assert loaded == clusters

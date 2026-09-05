@@ -351,9 +351,14 @@ class Runner:
         snapshot: HarnessSnapshot,
         rollout_dir: Path,
         task_extra: Mapping[str, Any] | None = None,
+        resume: bool = False,
     ) -> RolloutRecord:
         """One unscored rollout outside the lane machinery (M3 replay validation). Extra
-        task fields (``_ahd_replay``) reach the harness through the worker request only."""
+        task fields (``_ahd_replay``) reach the harness through the worker request only. With
+        ``resume`` a finished attempt (``done.json``) is reused instead of re-executed."""
+        marker = rollout_dir / DONE_FILENAME
+        if resume and marker.is_file():
+            return _load_record(marker)
         if rollout_dir.exists():
             shutil.rmtree(rollout_dir)
         record = self._rollout(
@@ -368,9 +373,12 @@ class Runner:
         self._write_done_marker(record)
         return record
 
-    def score_record(self, task: Task, record: RolloutRecord) -> RolloutRecord:
-        """Score one rollout record (infra records are returned unchanged)."""
-        return self._score(task, record, resume=False)
+    def score_record(
+        self, task: Task, record: RolloutRecord, *, resume: bool = False
+    ) -> RolloutRecord:
+        """Score one rollout record (infra records are returned unchanged); with ``resume`` an
+        existing ``score.json`` is reused."""
+        return self._score(task, record, resume=resume)
 
     def _write_done_marker(self, record: RolloutRecord) -> None:
         atomic_write_text(

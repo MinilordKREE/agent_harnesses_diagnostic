@@ -286,7 +286,11 @@ def replay_failures(
     max_candidates: int,
     economize: bool,
     only: Sequence[str] = (),
+    resume: bool = False,
+    subdir: str = "replay",
 ) -> list[ReplayResult]:
+    """``subdir`` = ``replay`` writes ``replays.json`` / ``failure_types.json``; any other
+    name (E0's ``replay_full``) writes ``replays_<subdir>.json`` and leaves the main files."""
     replayer = Replayer(
         runner=runner,
         spec=spec,
@@ -297,6 +301,8 @@ def replay_failures(
         k=k,
         max_candidates=max_candidates,
         economize=economize,
+        resume=resume,
+        subdir=subdir,
     )
     results: list[ReplayResult] = []
     for record in load_alignments(run_dir):
@@ -322,6 +328,9 @@ def replay_failures(
                 recorded_workspace=_recorded_workspace(failed_dir),
             )
         )
+    if subdir != "replay":
+        atomic_write_text(diagnosis_dir(run_dir) / f"replays_{subdir}.json", _dump(results))
+        return results
     atomic_write_text(diagnosis_dir(run_dir) / "replays.json", _dump(results))
     counts: dict[str, int] = {}
     for r in results:

@@ -54,3 +54,26 @@ def stratified_sample(taskset: TaskSet, *, n: int, seed: int) -> TaskSet:
         chosen.extend(ordered[: allocation[stratum]])
     chosen.sort(key=lambda t: (t.source_benchmark, t.id))
     return taskset.model_copy(update={"tasks": tuple(chosen)})
+
+
+def sample_per_source(taskset: TaskSet, *, per_source: int, seed: int) -> TaskSet:
+    """``per_source`` non-excluded tasks from every source benchmark (E0: equal strata).
+
+    Same shuffle as :func:`stratified_sample`, so the sample for ``per_source + m`` is a
+    superset of the sample for ``per_source`` (E0 decision rule D5 grows 30 -> 45 in place).
+    """
+    eligible = [t for t in taskset.tasks if not t.excluded]
+    groups: dict[str, list[Task]] = defaultdict(list)
+    for task in eligible:
+        groups[task.source_benchmark].append(task)
+    chosen: list[Task] = []
+    for stratum in sorted(groups):
+        if per_source > len(groups[stratum]):
+            raise ConfigError(
+                f"cannot sample {per_source} tasks from {len(groups[stratum])} in {stratum}"
+            )
+        ordered = sorted(groups[stratum], key=lambda t: t.id)
+        random.Random(_stratum_seed(seed, stratum)).shuffle(ordered)
+        chosen.extend(ordered[:per_source])
+    chosen.sort(key=lambda t: (t.source_benchmark, t.id))
+    return taskset.model_copy(update={"tasks": tuple(chosen)})

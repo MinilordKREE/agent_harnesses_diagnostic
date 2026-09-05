@@ -29,14 +29,15 @@ from ahd.core.hashing import JsonValue
 from ahd.core.io import atomic_write_text, read_json
 from ahd.errors import InfraError
 
-MANIFEST_SCHEMA_VERSION: Final = 4
+MANIFEST_SCHEMA_VERSION: Final = 5
 MANIFEST_FILENAME = "manifest.json"
 RESOLVED_CONFIG_FILENAME = "config.resolved.yaml"
 
 
 class Manifest(StrictModel):
-    schema_version: Literal[3, 4]
-    """v4 (M3): ``diagnosis`` block. v3 manifests are still readable."""
+    schema_version: Literal[3, 4, 5]
+    """v4 (M3): ``diagnosis`` block; v5 (E0): ``experiment`` block. Older manifests still
+    load."""
     run_id: str
     created_at: datetime
     seed: int
@@ -59,6 +60,9 @@ class Manifest(StrictModel):
     diagnosis: dict[str, JsonValue] | None = None
     """v4 (M3): ``clusters_sha256`` (membership hash), ``reference_run`` and
     ``instrument_snapshot_id``; written by ``ahd diag cluster``."""
+    experiment: dict[str, JsonValue] | None = None
+    """v5 (E0): ``role`` (calibration | confirmatory), ``stage``, ``spec_path``,
+    ``spec_sha256``; set by the experiment scripts so a run can be traced to a frozen spec."""
 
 
 def build_manifest(
@@ -69,6 +73,7 @@ def build_manifest(
     web_snapshot_id: str | None = None,
     harness_snapshot_id: str | None = None,
     run_spec: dict[str, JsonValue] | None = None,
+    experiment: dict[str, JsonValue] | None = None,
 ) -> Manifest:
     env = environment or probe_environment(repo_dir=Path.cwd())
     return Manifest(
@@ -89,6 +94,7 @@ def build_manifest(
         web_snapshot_id=web_snapshot_id,
         harness_snapshot_id=harness_snapshot_id,
         run_spec=run_spec,
+        experiment=experiment,
     )
 
 
@@ -100,6 +106,7 @@ def write_manifest(
     environment: EnvironmentInfo | None = None,
     harness_snapshot_id: str | None = None,
     run_spec: dict[str, JsonValue] | None = None,
+    experiment: dict[str, JsonValue] | None = None,
 ) -> Path:
     """Write ``manifest.json`` and ``config.resolved.yaml`` atomically; return the manifest path."""
     manifest = build_manifest(
@@ -108,6 +115,7 @@ def write_manifest(
         environment=environment,
         harness_snapshot_id=harness_snapshot_id,
         run_spec=run_spec,
+        experiment=experiment,
     )
     manifest_path = ctx.out_dir / MANIFEST_FILENAME
     atomic_write_text(manifest_path, manifest.model_dump_json(indent=2) + "\n")

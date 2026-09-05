@@ -258,6 +258,16 @@ never a 0.
   the rollout is `TaskFailure(kind="empty_answer")` with the deterministic part of the Claw
   score (`ahd.tasks.claw.partial_score`); `grader_error` stays infra for real exceptions.
 
+## Experiments
+
+- A spec (`experiments/<name>/spec.yaml`) is frozen and committed before the first run; the
+  decision rules are the owner's text and are applied mechanically by the report script.
+- Runs started by an experiment script carry `manifest.experiment` (role, stage, spec path,
+  spec sha256; manifest v5) and start only on a clean tree. Run ids are deterministic
+  (`e0a-<source>`, `e0b-b1-<source>-p<pass>`, `<run>-ref`) so every stage is resumable.
+- `data/<name>/` holds derived CSV tables only; `docs/experiments/<NAME>_REPORT.md` is
+  regenerated from `runs/` and must be byte-identical across regenerations.
+
 ## Run directory
 
 `runs/<run_id>/` with `run_id = YYYYMMDDTHHMMSSZ-<6 hex>` unless supplied. Contents:

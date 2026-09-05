@@ -299,6 +299,8 @@ class Replayer:
         k: int = 3,
         max_candidates: int = 5,
         economize: bool = True,
+        resume: bool = False,
+        subdir: str = "replay",
     ) -> None:
         self._runner = runner
         self._spec = spec.model_copy(update={"arm": REPLAY_ARM, "keep_workspaces": True})
@@ -309,6 +311,9 @@ class Replayer:
         self.k = k
         self.max_candidates = max_candidates
         self.economize = economize
+        self.resume = resume
+        self.subdir = subdir
+        """``replay`` normally; E0 uses ``replay_full`` for the --full-arms headroom subset."""
 
     def _one(
         self,
@@ -322,7 +327,7 @@ class Replayer:
         payload: dict[str, Any],
         drift_reports: dict[str, JsonValue],
     ) -> ReplayRollout:
-        rollout_dir = self._out_dir / "replay" / key / f"c{candidate.step}" / arm / f"k{index}"
+        rollout_dir = self._out_dir / self.subdir / key / f"c{candidate.step}" / arm / f"k{index}"
         lane = f"{replicate}-replay-c{candidate.step}-{arm}-k{index}"
         record: RolloutRecord = self._runner.execute_rollout(
             task,
@@ -331,6 +336,7 @@ class Replayer:
             snapshot=self._instrument,
             rollout_dir=rollout_dir,
             task_extra={"_ahd_replay": payload},
+            resume=self.resume,
         )
         report_path = rollout_dir / "replay_report.json"
         report = read_json(report_path) if report_path.is_file() else None
@@ -355,7 +361,7 @@ class Replayer:
                     "the reference action failed against the prefix state",
                 )
             else:
-                scored = self._runner.score_record(task, record)
+                scored = self._runner.score_record(task, record, resume=self.resume)
                 if scored.error_family == "infra":
                     status, detail = "infra", scored.error
                 else:
@@ -564,6 +570,7 @@ class Replayer:
             drift_reports=drift_reports,
         )
         atomic_write_text(
-            self._out_dir / "replay" / key / "replay.json", result.model_dump_json(indent=2) + "\n"
+            self._out_dir / self.subdir / key / "replay.json",
+            result.model_dump_json(indent=2) + "\n",
         )
         return result
