@@ -72,7 +72,8 @@ def test_manifest_roundtrip(git_repo: Path, run_config: RunConfig, tmp_path: Pat
     config_path = tmp_path / "c.yaml"
     manifest_path = write_manifest(ctx, run_config, config_path=config_path)
     manifest = read_manifest(manifest_path)
-    assert manifest.schema_version == 2
+    assert manifest.schema_version == 3
+    assert manifest.harness_snapshot_id is None and manifest.run_spec is None
     assert manifest.environment.unshare_available in (True, False)
     assert manifest.web_snapshot_id is None
     assert manifest.git_sha == ctx.git_sha

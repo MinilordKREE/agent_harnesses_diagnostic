@@ -262,3 +262,33 @@ def test_claw_scoring_uses_the_patch(
 
 def test_model_task_type_is_pydantic(taskset: TaskSet) -> None:
     assert isinstance(taskset.tasks[0], Task)
+
+
+def test_claw_scoring_sets_repo_env_for_the_call(
+    taskset: TaskSet, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_claw_patch: None
+) -> None:
+    import os
+
+    seen: list[str | None] = []
+
+    def fake_score_task(
+        task: dict[str, Any], workspace: Path, final_answer: str, judge_client: Any = None
+    ) -> dict[str, Any]:
+        seen.append(os.environ.get("EVOBENCH_CLAW_REPO"))
+        return {"passed": True, "score": 1.0, "reason": "claw_grader: C=1.00 R=1.00"}
+
+    monkeypatch.setattr(scorer_module, "score_task", fake_score_task)
+    monkeypatch.delenv("EVOBENCH_CLAW_REPO", raising=False)
+    provider = FakeProvider("ok")
+    ledger = Ledger(tmp_path / "ledger.jsonl", "run-s")
+    judge = AhdJudgeClient(provider, config=JudgeConfig(), api_base="https://x", seed=1)
+    scorer = Scorer(judge=judge, ledger=ledger, arm="A", seed=1, claw_repo=tmp_path / "claw")
+    scorer.score(
+        taskset.by_id("claw-T000_synthetic"),
+        Artifacts(workspace=_workspace(tmp_path), final_answer=""),
+    )
+    scorer.score(
+        taskset.by_id("bc-en-0001"), Artifacts(workspace=_workspace(tmp_path), final_answer="x")
+    )
+    assert seen == [str(tmp_path / "claw"), None]  # set for Claw only, restored afterwards
+    assert "EVOBENCH_CLAW_REPO" not in os.environ

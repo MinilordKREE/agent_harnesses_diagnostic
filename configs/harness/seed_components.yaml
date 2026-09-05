@@ -1,0 +1,236 @@
+# Component manifest for Evo-Bench's seed policy harness (approved layout, M2).
+# Source: third_party/evo-bench/policy_harness_seed @ e1dc9386a193cab1ee8630824c085e5e26d0c730
+# This file is the WHERE vocabulary for M3 diagnosis and M4 proposals: every diagnosis or
+# patch names one component id from this list.
+#
+# Layers (ETCLOVG): execution, tooling, context, lifecycle, observability, verification,
+# governance. `patchable: false` marks components whose code lives outside the harness tree
+# (diagnosable, not patchable). `ambiguous: true` marks seams where a file straddles layers.
+#
+# Symbol grammar (resolved to line spans by ahd.harness.components at snapshot time):
+#   path                        whole file
+#   path:Name[.Name]            class / function / method / module-level assignment
+#   path:Qualname@text          smallest statement inside Qualname whose source contains text
+#   harness.json:key            the line declaring key in a JSON file
+#   evobench/...:Name           external (outside the tree): recorded, never located
+schema_version: 1
+harness: seed_codeact_bash_policy_harness
+harness_version: "0.1.0"
+source_sha: e1dc9386a193cab1ee8630824c085e5e26d0c730
+components:
+  - id: entry
+    layer: lifecycle
+    role: "construct the harness from harness.json, build components, expose run_task to the worker"
+    files: [harness.py]
+    symbols:
+      - "harness.py:PolicyHarness"
+      - "harness.py:PolicyHarness.__init__"
+      - "harness.py:PolicyHarness.run_task"
+    ambiguous: true
+    note: "also constructs the model client (execution) and reads budget keys (governance); kept in lifecycle as the wiring point"
+
+  - id: budget
+    layer: governance
+    role: "the frozen rollout budget: max steps, wall clock, per-command timeout default and clamp"
+    files: [harness.json, harness.py, agent/loop.py, agent/actions.py]
+    symbols:
+      - "harness.json:max_steps"
+      - "harness.json:rollout_wall_clock_seconds"
+      - "harness.py:PolicyHarness.__init__@self.max_steps"
+      - "harness.py:PolicyHarness.__init__@self.rollout_wall_clock_seconds"
+      - "agent/loop.py:_stop_for_wall_clock"
+      - "agent/loop.py:run_policy_loop@elapsed >= wall_clock_seconds"
+      - "agent/actions.py:ToolRouter.execute@timeout = min(requested"
+    ambiguous: true
+    note: "budget values live in the harness tree; the runner refuses a snapshot whose harness.json budget keys differ from the frozen values (ahd.harness.validate)"
+
+  - id: model_client
+    layer: execution
+    role: "the policy model call: OpenAI-compatible chat completion with tool schemas"
+    files: [harness.py, agent/loop.py]
+    symbols:
+      - "harness.py:PolicyHarness.__init__@OpenAICompatibleClient"
+      - "agent/loop.py:run_policy_loop@components.model.create"
+    ambiguous: true
+    note: "the client class is evobench.models.client.OpenAICompatibleClient, outside the tree; only its construction and call sites are patchable"
+
+  - id: system_prompt
+    layer: context
+    role: "the fixed system instructions (CodeAct rules, workspace discipline, use finish)"
+    files: [system_prompt.md, harness.json]
+    symbols:
+      - "system_prompt.md"
+      - "harness.json:system_prompt"
+
+  - id: task_prompt
+    layer: context
+    role: "render the task (id, workspace path, prompt, public files) into the first user message"
+    files: [agent/components.py]
+    symbols:
+      - "agent/components.py:TaskAnalyzer"
+
+  - id: context_window
+    layer: context
+    role: "message assembly: append-only transcript handed to the model every step (no compaction, no memory)"
+    files: [agent/components.py, agent/state.py]
+    symbols:
+      - "agent/components.py:AppendOnlyContext"
+      - "agent/state.py:RolloutState@messages: list"
+    ambiguous: true
+    note: "the store (RolloutState.messages) is in state.py, the policy that shapes it is in components.py"
+
+  - id: observation_shaping
+    layer: context
+    role: "how tool output becomes text the model sees: lenient decode, 12 000-char middle truncation"
+    files: [tools/_util.py]
+    symbols:
+      - "tools/_util.py:decode"
+      - "tools/_util.py:truncate"
+    ambiguous: true
+    note: "lives in tools/ but decides what reaches the context"
+
+  - id: loop
+    layer: lifecycle
+    role: "the step loop: call model, dispatch actions, record trajectory, stop on limits or completion"
+    files: [agent/loop.py]
+    symbols:
+      - "agent/loop.py:run_policy_loop"
+
+  - id: planner
+    layer: lifecycle
+    role: "no-op observer hook called at initialize, after each assistant turn and each action"
+    files: [agent/components.py]
+    symbols:
+      - "agent/components.py:PassivePlanner"
+    ambiguous: true
+    note: "an empty seam; whatever a proposer puts here decides its real layer"
+
+  - id: completion_policy
+    layer: lifecycle
+    role: "when a rollout ends: finish accepted -> finished; no tool call -> assistant_no_tool_call with content as answer"
+    files: [agent/components.py]
+    symbols:
+      - "agent/components.py:SeedCompletionPolicy"
+      - "agent/components.py:Completion"
+
+  - id: tool_router
+    layer: tooling
+    role: "advertise tool schemas (own + injected), parse tool calls, dispatch to handlers"
+    files: [agent/actions.py]
+    symbols:
+      - "agent/actions.py:ToolRouter"
+      - "agent/actions.py:Action"
+    ambiguous: true
+    note: "execute() both dispatches (tooling) and runs the shell handler with timeout clamping (execution, governance)"
+
+  - id: tool_shell
+    layer: execution
+    role: "run_shell_command: bash in the workspace, captured output, process group killed on timeout"
+    files: [tools/shell.py]
+    symbols:
+      - "tools/shell.py:RUN_SHELL_TOOL"
+      - "tools/shell.py:run_shell_command"
+    ambiguous: true
+    note: "the schema half is tooling, the subprocess half is execution; one file"
+
+  - id: tool_finish
+    layer: tooling
+    role: "finish: record the final answer, no side effects"
+    files: [tools/finish.py]
+    symbols:
+      - "tools/finish.py:FINISH_TOOL"
+      - "tools/finish.py:finish_result"
+
+  - id: tool_registry
+    layer: tooling
+    role: "the ordered list of tool schemas the model is offered"
+    files: [tools/__init__.py, harness.json]
+    symbols:
+      - "tools/__init__.py:TOOL_SCHEMAS"
+      - "harness.json:tools"
+    ambiguous: true
+    note: "harness.json:tools is declarative; the code reads TOOL_SCHEMAS. The validator requires the two to agree"
+
+  - id: tools_injected
+    layer: tooling
+    role: "runner-provided domain tools (Claw HTTP tools, APEX MCP) merged into the schema list and dispatched by name"
+    files: [agent/actions.py]
+    symbols:
+      - "agent/actions.py:ToolRouter.execute@injected_tools.dispatch"
+      - "evobench/policy/injected_tools.py:schemas"
+      - "evobench/policy/injected_tools.py:dispatch"
+    patchable: false
+    ambiguous: true
+    note: "the implementation is outside the tree; only the call site in actions.py is in the snapshot"
+
+  - id: middleware
+    layer: governance
+    role: "before/after hooks around each action (identity in the seed)"
+    files: [agent/components.py]
+    symbols:
+      - "agent/components.py:IdentityMiddleware"
+    ambiguous: true
+    note: "an empty seam; a proposer could use it for gating (governance) or output rewriting (context)"
+
+  - id: verifier
+    layer: verification
+    role: "accept or reject a tool result before it enters the context (accept-all in the seed)"
+    files: [agent/components.py]
+    symbols:
+      - "agent/components.py:AcceptAllVerifier"
+      - "agent/components.py:Verification"
+
+  - id: trajectory
+    layer: observability
+    role: "per-step trajectory entries (assistant message + usage + timing; tool call + output + timing), written to trajectory.json at finalize"
+    files: [agent/state.py, agent/loop.py]
+    symbols:
+      - "agent/state.py:RolloutState@trajectory: list"
+      - "agent/state.py:RolloutState.finalize@trajectory_path, {"
+      - 'agent/loop.py:run_policy_loop@"role": "assistant"'
+      - 'agent/loop.py:run_policy_loop@"role": "tool"'
+
+  - id: usage_accounting
+    layer: observability
+    role: "sum model usage per step into token_usage (prompt, completion, total, cached, ...)"
+    files: [agent/state.py, agent/loop.py]
+    symbols:
+      - "agent/state.py:RolloutState.add_usage"
+      - "agent/state.py:RolloutState@token_usage: dict"
+      - "agent/loop.py:run_policy_loop@state.add_usage"
+
+  - id: rollout_log
+    layer: observability
+    role: "human-readable rollout.log with per-step timing, tokens, commands, errors"
+    files: [agent/state.py]
+    symbols:
+      - "agent/state.py:RolloutState.create"
+      - "agent/state.py:RolloutState.log"
+
+  - id: metadata
+    layer: observability
+    role: "metadata.json and the PolicyRolloutResult returned to the worker"
+    files: [agent/state.py]
+    symbols:
+      - "agent/state.py:PolicyRolloutResult"
+      - "agent/state.py:RolloutState.finalize@metadata_path, {"
+
+  - id: error_handling
+    layer: lifecycle
+    role: "model-call exception -> exit model_call_error; shell timeout and unknown tool recorded as runtime_errors; no retry"
+    files: [agent/loop.py, agent/actions.py]
+    symbols:
+      - "agent/loop.py:run_policy_loop@except Exception"
+      - "agent/actions.py:ToolRouter.execute@result.get(\"timeout\")"
+      - "agent/actions.py:ToolRouter.execute@unknown tool"
+    ambiguous: true
+    note: "adding retries here touches lifecycle and governance"
+
+  - id: wiring
+    layer: lifecycle
+    role: "the component bundle and its default construction"
+    files: [agent/components.py, agent/__init__.py]
+    symbols:
+      - "agent/components.py:HarnessComponents"
+      - "agent/components.py:build_default_components"
+      - "agent/__init__.py"

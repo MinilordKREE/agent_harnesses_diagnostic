@@ -120,3 +120,58 @@ def test_tasks_list_show_sample(fake_snapshot: Path, capsys: pytest.CaptureFixtu
     assert capsys.readouterr().out == first
     assert "-- 2 of 4 tasks" in first
     assert cli.main(["tasks", "show", "missing", *common]) == cli.EXIT_USAGE
+
+
+def test_harness_commands(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    seed = REPO_ROOT / "third_party" / "evo-bench" / "policy_harness_seed"
+    if not (seed / "harness.py").is_file():
+        pytest.skip("submodule not checked out")
+    store = tmp_path / "store"
+    assert cli.main(["harness", "snapshot", "--from", str(seed), "--store", str(store)]) == 0
+    out = capsys.readouterr().out
+    snapshot_id = next(
+        line.split()[1] for line in out.splitlines() if line.startswith("snapshot_id:")
+    )
+    assert "valid:              True" in out
+    assert cli.main(["harness", "components", snapshot_id, "--store", str(store)]) == 0
+    out = capsys.readouterr().out
+    assert "model_client" in out and "0 unresolved" in out
+    import shutil
+
+    edited = tmp_path / "edited"
+    shutil.copytree(seed, edited, ignore=shutil.ignore_patterns("__pycache__"))
+    (edited / "system_prompt.md").write_text("changed prompt\n", encoding="utf-8")
+    assert (
+        cli.main(
+            [
+                "harness",
+                "snapshot",
+                "--from",
+                str(edited),
+                "--store",
+                str(store),
+                "--provenance",
+                "manual",
+            ]
+        )
+        == 0
+    )
+    other = next(
+        line.split()[1]
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("snapshot_id:")
+    )
+    assert cli.main(["harness", "diff", snapshot_id, other, "--store", str(store)]) == 0
+    out = capsys.readouterr().out
+    assert "+changed prompt" in out and "-> system_prompt" in out
+
+
+def test_run_summarize_reads_summary(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    (tmp_path / "runs" / "r9").mkdir(parents=True)
+    (tmp_path / "runs" / "r9" / "summary.json").write_text('{"run_id": "r9"}\n', encoding="utf-8")
+    assert cli.main(["run", "summarize", "r9", "--runs-root", str(tmp_path / "runs")]) == 0
+    assert '"run_id": "r9"' in capsys.readouterr().out
+    assert (
+        cli.main(["run", "summarize", "nope", "--runs-root", str(tmp_path / "runs")])
+        == cli.EXIT_INFRA
+    )

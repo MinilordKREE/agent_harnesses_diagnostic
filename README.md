@@ -6,8 +6,9 @@ directories that record enough (git sha, config hash, pricing version) to be re-
 later.
 
 M0 ships the scaffold, the LLM client layer and the run-context primitives. M1 adds the
-task substrate on Evo-Bench: loader, stratified sampling, and judge and scorer adapters.
-Harness execution and experiment logic come in later modules.
+task substrate on Evo-Bench: loader, stratified sampling, and judge and scorer adapters. M2
+adds the harness model (snapshots, component manifest, validation) and the runner that drives
+Evo-Bench's policy worker per rollout. Diagnosis and proposal logic come in later modules.
 
 **Data use.** Evo-Bench data (CC-BY-4.0, with upstream terms) is used here exclusively for
 the evaluation of harness evolution. It is never used for training, fine-tuning or parameter
@@ -27,6 +28,9 @@ src/ahd/            the package
   core/             hashing, atomic io, config models, run context, manifest, trace writer, environment probe
   llm/              types, Provider protocol, DeepSeek client, retry, cache, pricing, ledger
   tasks/            Evo-Bench loader, stratified sampling, judge and scorer adapters, metrics
+  harness/          snapshots (hash, parent, diff), component manifest with line spans, patch apply, validation
+  runner/           RunSpec, Runner over Evo-Bench's worker, trajectory events, reference mode, summary
+configs/harness/        seed_components.yaml (the WHERE vocabulary), reference_block.md
 third_party/evo-bench   git submodule (Apache-2.0), imported as the `evo-bench` path dependency
 external/claw-eval      (gitignored) Claw-Eval checkout made by `make setup-claw`
 tests/unit/         offline; the provider is a fake transport
@@ -63,6 +67,11 @@ uv run ahd llm ping --config configs/runs/example.yaml [--cache]
 uv run ahd tasks list --split validation --domain office
 uv run ahd tasks show <task-id> [--show-gold]
 uv run ahd tasks sample --n 20 --seed 0
+uv run ahd harness snapshot --from third_party/evo-bench/policy_harness_seed
+uv run ahd harness components <snapshot_id>
+uv run ahd harness diff <a> <b>
+uv run ahd run --harness <snapshot_id> --tasks claw-T007zh_todo_management --replicates 2 --mode normal
+uv run ahd run summarize <run_id>
 ```
 
 `ahd llm ping` makes one real call, writes a run directory under `runs/ping-*/` with

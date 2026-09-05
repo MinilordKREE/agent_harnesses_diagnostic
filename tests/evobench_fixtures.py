@@ -62,7 +62,7 @@ def validation_records() -> list[dict[str, Any]]:
                 "tool_schemas": [],
                 "endpoints": {},
                 "services": [],
-                "mock_today": "2026-01-01",
+                "mock_today": None,
             },
             "scorer": {"type": "claw_grader", "task_dir": "tasks/T000_synthetic"},
         },

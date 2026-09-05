@@ -17,9 +17,12 @@ An unknown reason string is itself an ``InfraError``; nothing is silently scored
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
+import os
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -211,14 +214,48 @@ def artifact_sha256(artifacts: Artifacts) -> str:
     return digest.hexdigest()
 
 
+CLAW_REPO_ENV = "EVOBENCH_CLAW_REPO"
+
+
+@contextlib.contextmanager
+def claw_repo_env(claw_repo: Path | None) -> Iterator[None]:
+    """Point Evo-Bench's host-side Claw grader at the checkout for the duration of a call.
+
+    ``evobench.evaluation.scorer._claw_grader`` resolves ``task_dir`` through
+    ``claw_runtime.claw_repo_root()``, which reads ``EVOBENCH_CLAW_REPO`` from the *process*
+    environment (default ``/opt/claw-eval``); the variable is set here and restored after.
+    """
+    if claw_repo is None:
+        yield
+        return
+    previous = os.environ.get(CLAW_REPO_ENV)
+    os.environ[CLAW_REPO_ENV] = str(claw_repo)
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(CLAW_REPO_ENV, None)
+        else:
+            os.environ[CLAW_REPO_ENV] = previous
+
+
 class Scorer:
     """``score(task, artifacts) -> Score``; judge calls are ledgered and artifact-cached."""
 
-    def __init__(self, *, judge: AhdJudgeClient, ledger: Ledger, arm: str, seed: int) -> None:
+    def __init__(
+        self,
+        *,
+        judge: AhdJudgeClient,
+        ledger: Ledger,
+        arm: str,
+        seed: int,
+        claw_repo: Path | None = None,
+    ) -> None:
         self._judge = judge
         self._ledger = ledger
         self._arm = arm
         self._seed = seed
+        self._claw_repo = claw_repo
 
     def _precheck(self, task: Task, artifacts: Artifacts) -> tuple[str, str] | None:
         """Structural failures decided without a judge call: (kind, reason)."""
@@ -263,7 +300,7 @@ class Scorer:
             evo_task["_trajectory_path"] = str(artifacts.trajectory_path)
         judge = self._judge.bind(unit_id=task.id, cache_scope=f"artifact:{artifact}")
         if task.source_benchmark == "claw_eval":
-            with patched_claw_judge(judge):
+            with claw_repo_env(self._claw_repo), patched_claw_judge(judge):
                 raw = _call_score_task(evo_task, artifacts, judge)
         else:
             raw = _call_score_task(evo_task, artifacts, judge)

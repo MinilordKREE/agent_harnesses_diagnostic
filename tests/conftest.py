@@ -38,6 +38,12 @@ models:
   fake-model:
     peak:     {input_cache_hit: 2.0, input_cache_miss: 4.0, output: 8.0}
     off_peak: {input_cache_hit: 1.0, input_cache_miss: 2.0, output: 4.0}
+search:
+  serper:
+    usd_per_query: 0.001
+    pricing_version: "search-test.1"
+    as_of: 2026-09-05
+    source: test
 """
 
 # A Wednesday at noon UTC: off-peak in the schedule above.

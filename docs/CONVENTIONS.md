@@ -126,12 +126,15 @@ licensed repository, that one is cited instead.
   seed, model, prompt_tokens, completion_tokens, cache_hit_prompt_tokens, reasoning_tokens,
   cached, latency_ms, usd, pricing_version, pricing_tier, attempt, status_code, error_kind,
   error, request_sha256.
-- Event kinds: `call`, `infra_retry`, `infra_failure`, `task_failure`, `search`. `summarize()`
+- Event kinds: `call`, `policy`, `infra_retry`, `infra_failure`, `task_failure`, `search`. `summarize()`
   counts infra and task events separately and never adds them together. `search` rows are
   one per web-search provider call, priced per query from the `search` section of
   `configs/pricing.yaml` (own `pricing_version`); their spend is reported as `search_usd`
   next to LLM `usd`, never folded into it, because environment interaction is part of the
-  budget a matched-compute baseline must match. Among `task_failure` rows,
+  budget a matched-compute baseline must match. `policy` rows (v3) are one per rollout: tokens
+  summed from the trajectory's per-step usage, priced at the rollout's start tier, reconciled
+  against `metadata.json` (a mismatch is `InfraError`, never a silently accepted number).
+  Serper rows inferred from shell commands carry `approximate: true` until M2b observes the wire. Among `task_failure` rows,
   `error_kind: budget_exhausted` has its own `budget_exhausted` column and is excluded from
   `task_failures`; budget exhaustion is part of the estimand and is never hidden inside a
   generic failure count.
@@ -167,13 +170,56 @@ family: `infra` raises `InfraError` (and writes an `infra_failure` row), `task` 
 verdict. An unknown string is `InfraError(kind="unknown_reason")`. A missing resource is
 never a 0.
 
+## Harness snapshots
+
+- A snapshot is an immutable copy of a harness tree under `<store>/<snapshot_id>/tree/` with
+  `snapshot.json` (sha256, `evobench_revision` = first 16 hex, parent, provenance, files),
+  `components.json` (the manifest with AST-derived spans) and `diff.patch` against the parent.
+  `snapshot_id` is the first 12 hex of `sha256_dir(tree)`. Loading re-hashes the tree and
+  refuses a tampered one.
+- The seed snapshot is Evo-Bench's `policy_harness_seed` copied verbatim. New snapshots come
+  only from `apply_patch(parent, unified_diff)`; exact-context application, no fuzz.
+- The runner refuses (never adjusts) a snapshot whose `harness.json` budget keys differ from
+  the frozen `Budget`, whose `harness.json:tools` disagrees with `TOOL_SCHEMAS`, or which
+  imports anything outside the standard library, its own tree and the two Evo-Bench modules
+  the seed uses (`evobench.models.client`, `evobench.policy.injected_tools`).
+- `configs/harness/seed_components.yaml` is the WHERE vocabulary: diagnoses and patches name
+  component ids. `locate(path, line)` picks the narrowest span; ties keep all candidates;
+  a line covered by no symbol falls back to file-level ownership with `exact: false`.
+  Spans are re-derived for every new snapshot.
+
+## Runs and rollouts
+
+- A run executes one `RunSpec` (snapshot, split, task ids, mode, replicate ids, frozen
+  budget, policy model, `mock_today`) recorded in the manifest as `run_spec`.
+- The policy model is the paper's: `deepseek-v4-flash`, temperature 1.0,
+  `reasoning_effort: max`, 65 536 output tokens, 600 s timeout. Budget: 300 steps, 3 600 s
+  wall clock, 120 s per command, 12 000-char observations. Claw's benchmark aggregate needs
+  three replicates; `summary.json` says whether `k` matched.
+- Per rollout: Evo-Bench's own files plus `trajectory.jsonl` (M0 envelope, kinds
+  `rollout_start, model_call, tool_call, observation, final, rollout_end`, every step event
+  carries `step`), `artifacts/`, `score.json`, `failure.json`. A crashed rollout gets a
+  `trajectory.jsonl` rebuilt from `rollout.log` with `partial: true`.
+- Outcome families per rollout: `none` (scored), `infra` (worker failure, `model_call_error`,
+  usage mismatch, scorer infra), `budget` (`max_steps`, `rollout_wall_clock_timeout`, or an
+  explicit USD cap). Budget-exhausted rollouts are still scored; infra rollouts are not.
+- Reference mode appends `configs/harness/reference_block.md` to the public prompt and retries
+  up to `reference_max_attempts`, stopping at the first pass; every record carries
+  `verified: pending` until M3's genuineness judge sets it. Normal-mode scores are written only
+  after all replicates of a task have run.
+- `mock_today` is injected into a Claw task's `claw_public` only when the task's own value is
+  null; the run date is in the manifest either way.
+
 ## Run directory
 
 `runs/<run_id>/` with `run_id = YYYYMMDDTHHMMSSZ-<6 hex>` unless supplied. Contents:
 
 | File | Writer | Contents |
 |---|---|---|
-| `manifest.json` | `ahd.core.manifest` | schema_version (2), run_id, created_at, seed, config_sha256, config_schema_version, config_path, git_sha, git_dirty, ahd_version, python_version, platform, out_dir, environment (openai/pydantic versions, LibreOffice version, unshare availability, Evo-Bench submodule sha, dataset id and snapshot sha, Claw-Eval commit), web_snapshot_id (reserved, `null` until M2) |
+| `manifest.json` | `ahd.core.manifest` | schema_version (3), run_id, created_at, seed, config_sha256, config_schema_version, config_path, git_sha, git_dirty, ahd_version, python_version, platform, out_dir, environment (openai/pydantic versions, LibreOffice version, unshare availability, Evo-Bench submodule sha, dataset id and snapshot sha, Claw-Eval commit, policy_sdk_max_retries), harness_snapshot_id, run_spec, web_snapshot_id (reserved, `null` until M2b) |
+| `harness/<snapshot_id>/` | `ahd.harness.snapshot` | the snapshot the run executed (tree, meta, components, diff) |
+| `rollouts/<task>/<replicate>[/attempt_N]/` | `ahd.runner` | Evo-Bench files + `trajectory.jsonl`, `artifacts/`, `score.json`, `failure.json`, `worker_failure.json` |
+| `summary.json`, `failures.json`, `references.json` | `ahd.runner` | per-source and per-task aggregates; M3's failure input; reference attempts |
 | `config.resolved.yaml` | `ahd.core.manifest` | the validated config with defaults applied |
 | `trace.jsonl` | `ahd.core.trace.TraceWriter` | events, envelope below |
 | `ledger.jsonl` | `ahd.llm.ledger.Ledger` | cost and infra/task events |

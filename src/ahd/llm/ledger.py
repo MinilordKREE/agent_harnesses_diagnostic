@@ -12,7 +12,11 @@ provider call, priced per query; an environment-interaction cost that matched-co
 baselines must report). Infra and task rows are never merged.
 
 Schema v2 (M1): added ``search`` event and the ``search_provider`` / ``search_query_sha256``
-columns. Within ``task_failure`` rows, ``error_kind == "budget_exhausted"`` is counted on its
+columns. Schema v3 (M2): added the ``policy`` event (one row per rollout, tokens summed from
+the trajectory's per-step usage and priced at the rollout's start tier) and the ``replicate``,
+``steps`` and ``approximate`` columns (``approximate`` marks Serper rows inferred from shell
+commands rather than observed on the wire). Within ``task_failure`` rows,
+``error_kind == "budget_exhausted"`` is counted on its
 own as ``budget_exhausted`` and excluded from ``task_failures``, because budget exhaustion is
 part of the estimand and must stay visible as its own column.
 """
@@ -29,12 +33,14 @@ from ahd.core.config import StrictModel
 from ahd.core.io import append_jsonl, read_jsonl
 from ahd.errors import InfraError, TaskFailure
 from ahd.llm.pricing import CostBreakdown, PricingTier, SearchCost
-from ahd.llm.types import ChatRequest, ChatResponse
+from ahd.llm.types import ChatRequest, ChatResponse, Usage
 
-LEDGER_SCHEMA_VERSION = 2
+LEDGER_SCHEMA_VERSION = 3
 LEDGER_FILENAME = "ledger.jsonl"
 
-type LedgerEvent = Literal["call", "infra_retry", "infra_failure", "task_failure", "search"]
+type LedgerEvent = Literal[
+    "call", "policy", "infra_retry", "infra_failure", "task_failure", "search"
+]
 
 
 class LedgerRow(StrictModel):
@@ -62,6 +68,9 @@ class LedgerRow(StrictModel):
     request_sha256: str | None = None
     search_provider: str | None = None
     search_query_sha256: str | None = None
+    replicate: str | None = None
+    steps: int | None = None
+    approximate: bool = False
 
 
 BUDGET_EXHAUSTED_KIND = "budget_exhausted"
@@ -84,6 +93,11 @@ class LedgerSummary(StrictModel):
     search_calls: int = 0
     search_usd: float = 0.0
     """Web-search spend (``search`` rows); reported next to ``usd``, never folded into it."""
+    policy_rollouts: int = 0
+    policy_prompt_tokens: int = 0
+    policy_completion_tokens: int = 0
+    policy_usd: float = 0.0
+    """Policy-model spend (``policy`` rows); the rollouts under study, separate from ``usd``."""
 
 
 class Ledger:
@@ -257,8 +271,14 @@ class Ledger:
         cost: SearchCost,
         query_sha256: str,
         latency_ms: int = 0,
+        replicate: str | None = None,
+        approximate: bool = False,
     ) -> LedgerRow:
-        """One web-search provider call, priced per query from ``pricing.yaml``."""
+        """One web-search provider call, priced per query from ``pricing.yaml``.
+
+        ``approximate=True`` means the call was inferred from a shell command in the trajectory
+        (M2), not observed on the wire.
+        """
         row = LedgerRow.model_validate(
             {
                 **self._fields(
@@ -269,6 +289,42 @@ class Ledger:
                 "latency_ms": latency_ms,
                 "search_provider": cost.provider,
                 "search_query_sha256": query_sha256,
+                "replicate": replicate,
+                "approximate": approximate,
+            }
+        )
+        self.append(row)
+        return row
+
+    def record_policy_rollout(
+        self,
+        *,
+        arm: str,
+        unit_id: str,
+        seed: int,
+        model: str,
+        replicate: str,
+        usage: Usage,
+        cost: CostBreakdown,
+        steps: int,
+        latency_ms: int,
+        request_sha256: str | None = None,
+    ) -> LedgerRow:
+        """One policy rollout: tokens summed from per-step usage, priced at the start tier."""
+        row = LedgerRow.model_validate(
+            {
+                **self._fields(event="policy", arm=arm, unit_id=unit_id, seed=seed, model=model),
+                "prompt_tokens": usage.prompt_tokens,
+                "completion_tokens": usage.completion_tokens,
+                "cache_hit_prompt_tokens": usage.cache_hit_prompt_tokens,
+                "reasoning_tokens": usage.reasoning_tokens,
+                "usd": cost.usd,
+                "pricing_version": cost.pricing_version,
+                "pricing_tier": cost.tier,
+                "latency_ms": latency_ms,
+                "replicate": replicate,
+                "steps": steps,
+                "request_sha256": request_sha256,
             }
         )
         self.append(row)
@@ -311,4 +367,9 @@ def summarize(rows: list[LedgerRow]) -> LedgerSummary:
             case "search":
                 counts["search_calls"] += 1
                 counts["search_usd"] += row.usd
+            case "policy":
+                counts["policy_rollouts"] += 1
+                counts["policy_prompt_tokens"] += row.prompt_tokens
+                counts["policy_completion_tokens"] += row.completion_tokens
+                counts["policy_usd"] += row.usd
     return LedgerSummary.model_validate(counts)

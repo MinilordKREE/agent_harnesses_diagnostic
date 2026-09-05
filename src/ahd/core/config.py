@@ -105,6 +105,76 @@ class TaskSourceConfig(StrictModel):
     """Stratified subsample size (by source, seeded with the run seed); ``None`` = all."""
 
 
+class PolicyModelSpec(StrictModel):
+    """The policy model exactly as Evo-Bench's worker expects it (``ModelConfig`` fields).
+
+    Defaults are the paper's ``configs/paper/policy_deepseek_v4_flash.json``. ``api_base`` is a
+    literal because the worker receives a resolved value (client.py:49-58); it stays settable so
+    a later module can point it at a local proxy without touching the harness.
+    """
+
+    provider: Literal["openai-compatible"] = "openai-compatible"
+    model: str = "deepseek-v4-flash"
+    api_base: str = "https://api.deepseek.com"
+    api_key_env: str = "DEEPSEEK_API_KEY"
+    temperature: float | None = 1.0
+    reasoning_effort: ReasoningEffort | None = "max"
+    max_output_tokens: int = Field(default=65536, ge=1)
+    timeout_seconds: int = Field(default=600, ge=1)
+    context_window_tokens: int = Field(default=256_000, ge=1)
+
+    def to_evobench_dict(self) -> dict[str, Any]:
+        """Keyword arguments for ``evobench.models.client.ModelConfig``."""
+        return {
+            "provider": self.provider,
+            "api_base": self.api_base,
+            "api_key_env": self.api_key_env,
+            "model": self.model,
+            "api_base_env": None,
+            "temperature": self.temperature,
+            "reasoning_effort": self.reasoning_effort,
+            "max_output_tokens": self.max_output_tokens,
+            "timeout_seconds": self.timeout_seconds,
+            "require_api_key": True,
+            "anthropic_auth": "api_key",
+            "cache_control": None,
+            "extra_body": None,
+            "context_window_tokens": self.context_window_tokens,
+        }
+
+
+class Budget(StrictModel):
+    """The frozen rollout budget (docs/reuse/evobench_runner.md section i).
+
+    ``max_steps`` and ``rollout_wall_clock_seconds`` must equal the values in the snapshot's
+    ``harness.json``; the runner refuses a snapshot that differs. ``usd_cap_per_rollout`` is an
+    ahd-only, post-hoc check (off by default).
+    """
+
+    max_steps: int = Field(default=300, ge=1)
+    rollout_wall_clock_seconds: int = Field(default=3600, ge=1)
+    command_timeout_seconds: int = Field(default=120, ge=1)
+    observation_truncate_chars: int = Field(default=12_000, ge=1)
+    usd_cap_per_rollout: float | None = Field(default=None, gt=0.0)
+
+    def worker_timeout_seconds(self, model_timeout_seconds: int) -> int:
+        """Evo-Bench's host deadline formula (evobench/policy/adapter.py:898-919)."""
+        legacy = max(300, model_timeout_seconds * 20)
+        harness_aware = self.rollout_wall_clock_seconds + model_timeout_seconds + 300
+        return max(legacy, harness_aware)
+
+
+class RunDefaults(StrictModel):
+    mode: Literal["normal", "reference"] = "normal"
+    replicates: int = Field(default=1, ge=1)
+    mock_today: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    """Study-wide date injected into a Claw task's ``claw_public.mock_today`` only when the task's
+    own value is null; recorded in the manifest."""
+    reference_max_attempts: int = Field(default=5, ge=1)
+    keep_workspaces: bool = False
+    arm: str = Field(default="seed", pattern=r"^[A-Za-z0-9._-]+$")
+
+
 class RunConfig(StrictModel):
     schema_version: Literal[1]
     name: str = Field(min_length=1, pattern=r"^[A-Za-z0-9._-]+$")
@@ -114,6 +184,9 @@ class RunConfig(StrictModel):
     llm: LLMConfig = LLMConfig()
     judge: JudgeConfig = JudgeConfig()
     tasks: TaskSourceConfig | None = None
+    policy: PolicyModelSpec = PolicyModelSpec()
+    budget: Budget = Budget()
+    run: RunDefaults = RunDefaults()
     pricing_path: Path = Path("configs/pricing.yaml")
     runs_root: Path = Path("runs")
 

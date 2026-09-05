@@ -33,6 +33,10 @@ class EnvironmentInfo(StrictModel):
     claw_eval_path: str | None
     libreoffice_version: str | None
     unshare_available: bool
+    policy_sdk_max_retries: int | None = None
+    """``openai.DEFAULT_MAX_RETRIES``: the retry count Evo-Bench's worker client inherits, since it
+    constructs ``OpenAI(api_key, base_url, timeout)`` without ``max_retries``
+    (evobench/models/client.py:103-107)."""
 
 
 def _run(args: list[str], *, cwd: Path | None = None) -> str | None:
@@ -45,6 +49,15 @@ def _run(args: list[str], *, cwd: Path | None = None) -> str | None:
     if completed.returncode != 0:
         return None
     return completed.stdout.strip() or None
+
+
+def _openai_default_retries() -> int | None:
+    try:
+        import openai
+    except ImportError:  # pragma: no cover - openai is a hard dependency
+        return None
+    value = getattr(openai, "DEFAULT_MAX_RETRIES", None)
+    return value if isinstance(value, int) else None
 
 
 def libreoffice_version() -> str | None:
@@ -94,4 +107,5 @@ def probe_environment(
         claw_eval_path=claw_path,
         libreoffice_version=libreoffice_version(),
         unshare_available=shutil.which("unshare") is not None,
+        policy_sdk_max_retries=_openai_default_retries(),
     )

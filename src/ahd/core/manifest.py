@@ -6,8 +6,9 @@ VeRO ``SessionManifest`` (schema_version, config digest) and AutoSaddler ``manif
 (schema_version, resolved config copy); no code was copied.
 
 Schema v2 (M1): added ``environment`` (tool and dependency versions, see
-:mod:`ahd.core.environment`) and the reserved ``web_snapshot_id`` (always ``None`` until M2's
-runner freezes web responses per experiment family).
+:mod:`ahd.core.environment`) and the reserved ``web_snapshot_id``.
+Schema v3 (M2): added ``harness_snapshot_id`` and ``run_spec`` (mode, replicates, frozen
+budget, policy model, mock_today); ``web_snapshot_id`` stays reserved until M2b.
 """
 
 from __future__ import annotations
@@ -24,16 +25,17 @@ from pydantic import ValidationError
 from ahd.core.config import RunConfig, StrictModel
 from ahd.core.context import RunContext
 from ahd.core.environment import EnvironmentInfo, probe_environment
+from ahd.core.hashing import JsonValue
 from ahd.core.io import atomic_write_text, read_json
 from ahd.errors import InfraError
 
-MANIFEST_SCHEMA_VERSION: Final = 2
+MANIFEST_SCHEMA_VERSION: Final = 3
 MANIFEST_FILENAME = "manifest.json"
 RESOLVED_CONFIG_FILENAME = "config.resolved.yaml"
 
 
 class Manifest(StrictModel):
-    schema_version: Literal[2]
+    schema_version: Literal[3]
     run_id: str
     created_at: datetime
     seed: int
@@ -49,7 +51,10 @@ class Manifest(StrictModel):
     environment: EnvironmentInfo
     web_snapshot_id: str | None = None
     """Reserved: id of the frozen web snapshot (Serper JSON and fetched pages) shared by an
-    experiment family. Set by M2's runner; ``None`` means no web freezing was in effect."""
+    experiment family. Set by M2b's record/replay proxy; ``None`` means no web freezing."""
+    harness_snapshot_id: str | None = None
+    run_spec: dict[str, JsonValue] | None = None
+    """The ``RunSpec`` the run executed (mode, replicate ids, budget, policy model, mock_today)."""
 
 
 def build_manifest(
@@ -58,6 +63,8 @@ def build_manifest(
     config_path: Path | None = None,
     environment: EnvironmentInfo | None = None,
     web_snapshot_id: str | None = None,
+    harness_snapshot_id: str | None = None,
+    run_spec: dict[str, JsonValue] | None = None,
 ) -> Manifest:
     env = environment or probe_environment(repo_dir=Path.cwd())
     return Manifest(
@@ -76,6 +83,8 @@ def build_manifest(
         out_dir=str(ctx.out_dir),
         environment=env,
         web_snapshot_id=web_snapshot_id,
+        harness_snapshot_id=harness_snapshot_id,
+        run_spec=run_spec,
     )
 
 
@@ -85,9 +94,17 @@ def write_manifest(
     *,
     config_path: Path | None = None,
     environment: EnvironmentInfo | None = None,
+    harness_snapshot_id: str | None = None,
+    run_spec: dict[str, JsonValue] | None = None,
 ) -> Path:
     """Write ``manifest.json`` and ``config.resolved.yaml`` atomically; return the manifest path."""
-    manifest = build_manifest(ctx, config_path=config_path, environment=environment)
+    manifest = build_manifest(
+        ctx,
+        config_path=config_path,
+        environment=environment,
+        harness_snapshot_id=harness_snapshot_id,
+        run_spec=run_spec,
+    )
     manifest_path = ctx.out_dir / MANIFEST_FILENAME
     atomic_write_text(manifest_path, manifest.model_dump_json(indent=2) + "\n")
     resolved = yaml.safe_dump(config.model_dump(mode="json"), sort_keys=True, allow_unicode=True)

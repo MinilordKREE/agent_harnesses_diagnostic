@@ -95,7 +95,7 @@ def test_search_rows_are_priced_and_counted_apart(tmp_path: Path) -> None:
     assert [r.event for r in rows] == ["search", "search"]
     assert rows[0].search_provider == "serper" and rows[0].model == "serper"
     assert rows[0].pricing_version == "s.1" and rows[0].usd == 0.001
-    assert rows[0].schema_version == LEDGER_SCHEMA_VERSION == 2
+    assert rows[0].schema_version == LEDGER_SCHEMA_VERSION == 3
     summary = summarize(rows)
     assert (summary.search_calls, summary.calls) == (2, 0)
     assert summary.search_usd == pytest.approx(0.002)
