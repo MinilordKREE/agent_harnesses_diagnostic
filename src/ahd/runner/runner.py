@@ -29,7 +29,7 @@ import os
 import shutil
 import traceback
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
@@ -342,6 +342,36 @@ class Runner:
         self._write_done_marker(record)
         return record
 
+    def execute_rollout(
+        self,
+        task: Task,
+        replicate: str,
+        *,
+        spec: RunSpec,
+        snapshot: HarnessSnapshot,
+        rollout_dir: Path,
+        task_extra: Mapping[str, Any] | None = None,
+    ) -> RolloutRecord:
+        """One unscored rollout outside the lane machinery (M3 replay validation). Extra
+        task fields (``_ahd_replay``) reach the harness through the worker request only."""
+        if rollout_dir.exists():
+            shutil.rmtree(rollout_dir)
+        record = self._rollout(
+            task,
+            replicate,
+            1,
+            spec=spec,
+            snapshot=snapshot,
+            rollout_dir=rollout_dir,
+            task_extra=task_extra,
+        )
+        self._write_done_marker(record)
+        return record
+
+    def score_record(self, task: Task, record: RolloutRecord) -> RolloutRecord:
+        """Score one rollout record (infra records are returned unchanged)."""
+        return self._score(task, record, resume=False)
+
     def _write_done_marker(self, record: RolloutRecord) -> None:
         atomic_write_text(
             record.rollout_dir / DONE_FILENAME,
@@ -388,6 +418,7 @@ class Runner:
         snapshot: HarnessSnapshot,
         rollout_dir: Path,
         reference_block: str | None = None,
+        task_extra: Mapping[str, Any] | None = None,
     ) -> RolloutRecord:
         from evobench.evaluation.tasks import prepare_task_workspace
 
@@ -399,6 +430,8 @@ class Runner:
             )
         )
         public = self._public_task(task, spec=spec, reference_block=reference_block)
+        if task_extra:
+            public.update(task_extra)
         request = build_request(
             harness_dir=snapshot.tree,
             task=public,

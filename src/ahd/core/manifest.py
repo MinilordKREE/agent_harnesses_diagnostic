@@ -29,13 +29,14 @@ from ahd.core.hashing import JsonValue
 from ahd.core.io import atomic_write_text, read_json
 from ahd.errors import InfraError
 
-MANIFEST_SCHEMA_VERSION: Final = 3
+MANIFEST_SCHEMA_VERSION: Final = 4
 MANIFEST_FILENAME = "manifest.json"
 RESOLVED_CONFIG_FILENAME = "config.resolved.yaml"
 
 
 class Manifest(StrictModel):
-    schema_version: Literal[3]
+    schema_version: Literal[3, 4]
+    """v4 (M3): ``diagnosis`` block. v3 manifests are still readable."""
     run_id: str
     created_at: datetime
     seed: int
@@ -55,6 +56,9 @@ class Manifest(StrictModel):
     harness_snapshot_id: str | None = None
     run_spec: dict[str, JsonValue] | None = None
     """The ``RunSpec`` the run executed (mode, replicate ids, budget, policy model, mock_today)."""
+    diagnosis: dict[str, JsonValue] | None = None
+    """v4 (M3): ``clusters_sha256`` (membership hash), ``reference_run`` and
+    ``instrument_snapshot_id``; written by ``ahd diag cluster``."""
 
 
 def build_manifest(
@@ -135,3 +139,14 @@ def read_manifest(path: Path) -> Manifest:
         return Manifest.model_validate(raw)
     except ValidationError as exc:
         raise InfraError(f"invalid manifest {path}:\n{exc}", kind="corrupt_file") from exc
+
+
+def update_manifest_diagnosis(run_dir: Path, block: dict[str, JsonValue]) -> Manifest:
+    """Rewrite ``manifest.json`` with a (merged) ``diagnosis`` block; bumps v3 files to v4."""
+    manifest = read_manifest(run_dir / MANIFEST_FILENAME)
+    merged: dict[str, JsonValue] = {**(manifest.diagnosis or {}), **block}
+    updated = manifest.model_copy(
+        update={"diagnosis": merged, "schema_version": MANIFEST_SCHEMA_VERSION}
+    )
+    atomic_write_text(run_dir / MANIFEST_FILENAME, updated.model_dump_json(indent=2) + "\n")
+    return updated

@@ -51,6 +51,8 @@ class ComponentSpec(StrictModel):
     files: tuple[str, ...] = ()
     symbols: tuple[str, ...] = ()
     patchable: bool = True
+    where_eligible: bool = True
+    """False for observability components: never a WHERE candidate, never in a corruption pool."""
     ambiguous: bool = False
     note: str | None = None
 

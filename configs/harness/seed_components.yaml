@@ -182,6 +182,7 @@ components:
 
   - id: trajectory
     layer: observability
+    where_eligible: false
     role: "per-step trajectory entries (assistant message + usage + timing; tool call + output + timing), written to trajectory.json at finalize"
     files: [agent/state.py, agent/loop.py]
     symbols:
@@ -192,6 +193,7 @@ components:
 
   - id: usage_accounting
     layer: observability
+    where_eligible: false
     role: "sum model usage per step into token_usage (prompt, completion, total, cached, ...)"
     files: [agent/state.py, agent/loop.py]
     symbols:
@@ -201,6 +203,7 @@ components:
 
   - id: rollout_log
     layer: observability
+    where_eligible: false
     role: "human-readable rollout.log with per-step timing, tokens, commands, errors"
     files: [agent/state.py]
     symbols:
@@ -209,6 +212,7 @@ components:
 
   - id: metadata
     layer: observability
+    where_eligible: false
     role: "metadata.json and the PolicyRolloutResult returned to the worker"
     files: [agent/state.py]
     symbols:

@@ -1,0 +1,11 @@
+{
+  "name": "seed_codeact_bash_policy_harness",
+  "version": "0.1.0",
+  "system_prompt": "system_prompt.md",
+  "max_steps": 300,
+  "rollout_wall_clock_seconds": 3600,
+  "tools": [
+    "run_shell_command",
+    "finish"
+  ]
+}

@@ -44,7 +44,7 @@ packages = ["src/ahd"]
 line-length = 100
 target-version = "py312"
 src = ["src", "tests"]
-extend-exclude = ["third_party"]
+extend-exclude = ["third_party", "src/ahd/diagnosis/instrument"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "UP", "N", "SIM", "RUF", "T20", "PTH", "RET", "ERA"]
@@ -63,12 +63,17 @@ python_version = "3.12"
 plugins = ["pydantic.mypy"]
 strict = true
 files = ["src", "tests"]
+exclude = ["src/ahd/diagnosis/instrument/"]
 warn_unreachable = true
 pretty = true
 
 [[tool.mypy.overrides]]
 module = ["evobench.*", "claw_eval.*", "datasets.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["ahd.diagnosis.instrument.*"]
+ignore_errors = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

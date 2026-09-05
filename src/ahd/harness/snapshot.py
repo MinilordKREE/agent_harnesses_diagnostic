@@ -38,7 +38,9 @@ _IGNORE = shutil.ignore_patterns(
     "__pycache__", "*.pyc", ".git", ".mypy_cache", ".ruff_cache", ".pytest_cache"
 )
 
-type Provenance = Literal["seed", "proposer", "manual"]
+type Provenance = Literal["seed", "proposer", "manual", "instrument"]
+"""``instrument``: the M3 replay instrument (``ahd/diagnosis/instrument``), hashed like a snapshot
+but never an experimental arm."""
 
 
 class SnapshotMeta(StrictModel):

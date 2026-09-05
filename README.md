@@ -8,7 +8,9 @@ later.
 M0 ships the scaffold, the LLM client layer and the run-context primitives. M1 adds the
 task substrate on Evo-Bench: loader, stratified sampling, and judge and scorer adapters. M2
 adds the harness model (snapshots, component manifest, validation) and the runner that drives
-Evo-Bench's policy worker per rollout. Diagnosis and proposal logic come in later modules.
+Evo-Bench's policy worker per rollout. M3 adds diagnosis: reference genuineness, trajectory
+alignment, replay validation of the divergence step, error signals, clustering, deterministic
+corruption arms and a leakage probe (`docs/DEFINITIONS.md`). Proposal logic comes in M4.
 
 **Data use.** Evo-Bench data (CC-BY-4.0, with upstream terms) is used here exclusively for
 the evaluation of harness evolution. It is never used for training, fine-tuning or parameter
@@ -30,7 +32,9 @@ src/ahd/            the package
   tasks/            Evo-Bench loader, stratified sampling, judge and scorer adapters, metrics
   harness/          snapshots (hash, parent, diff), component manifest with line spans, patch apply, validation
   runner/           RunSpec, Runner over Evo-Bench's worker, trajectory events, reference mode, summary
+  diagnosis/        schema, align, attribution, replay (+ instrument/ copy of the seed), genuineness, signal, cluster, corrupt, leakage, pipeline
 configs/harness/        seed_components.yaml (the WHERE vocabulary), reference_block.md
+configs/prompts/diagnosis/  diagnosis template, reference/system signal, genuineness and leakage prompts
 third_party/evo-bench   git submodule (Apache-2.0), imported as the `evo-bench` path dependency
 external/claw-eval      (gitignored) Claw-Eval checkout made by `make setup-claw`
 tests/unit/         offline; the provider is a fake transport
@@ -73,6 +77,14 @@ uv run ahd harness diff <a> <b>
 uv run ahd run --harness <snapshot_id> --tasks claw-T007zh_todo_management --replicates 2 --mode normal --workers 4
 uv run ahd run resume <run_id> [--workers 4]
 uv run ahd run summarize <run_id>
+uv run ahd diag reference <reference_run_id>                      # genuineness verdicts
+uv run ahd diag align <run_id> --reference-run <reference_run_id>
+uv run ahd diag replay <run_id> --reference-run <reference_run_id> --k 3 --max-candidates 5
+uv run ahd diag signal <run_id> --reference-run <reference_run_id>
+uv run ahd diag cluster <run_id> --reference-run <reference_run_id>
+uv run ahd diag corrupt <run_id> --arm corrupt_where_near --seed 0
+uv run ahd diag leakage <run_id>
+uv run ahd diag cost <run_id>
 ```
 
 `ahd llm ping` makes one real call, writes a run directory under `runs/ping-*/` with

@@ -460,6 +460,287 @@ def cmd_run_summarize(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+# ---------------------------------------------------------------- M3 diagnosis commands
+
+
+def _diag_run_dir(args: argparse.Namespace) -> Path:
+    runs_root = (
+        args.runs_root if args.runs_root is not None else load_run_config(args.config).runs_root
+    )
+    run_dir = Path(runs_root) / str(args.run_id)
+    if not (run_dir / "manifest.json").is_file():
+        raise InfraError(f"run {args.run_id} not found under {runs_root}", kind="missing_file")
+    return run_dir
+
+
+def _diag_reference_dir(args: argparse.Namespace, run_dir: Path) -> Path:
+    reference = run_dir.parent / str(args.reference_run)
+    if not (reference / "references.json").is_file():
+        raise InfraError(
+            f"{args.reference_run} has no references.json (not a reference-mode run?)",
+            kind="missing_file",
+        )
+    return reference
+
+
+class _DiagContext:
+    """Everything the diag steps share: config of the run, settings, ledger, model, tasks."""
+
+    def __init__(self, run_dir: Path) -> None:
+        from ahd.diagnosis.llm import DiagnosisLLM, DiagnosisModelConfig
+
+        self.run_dir = run_dir
+        self.ctx, self.manifest = load_run_context(run_dir)
+        try:
+            self.config = RunConfig.model_validate(
+                yaml.safe_load((run_dir / RESOLVED_CONFIG_FILENAME).read_text(encoding="utf-8"))
+            )
+        except (OSError, yaml.YAMLError) as exc:
+            raise InfraError(
+                f"cannot read resolved config of {run_dir}: {exc}", kind="missing_file"
+            ) from exc
+        if self.manifest.harness_snapshot_id is None:
+            raise ConfigError(f"run {run_dir.name} has no harness snapshot; nothing to diagnose")
+        self.settings = load_settings()
+        self.pricing = load_pricing(self.config.pricing_path)
+        self.ledger = Ledger(run_dir / LEDGER_FILENAME, self.ctx.run_id)
+        self.provider = DeepSeekClient(
+            transport=make_transport(self.settings, self.config),
+            ledger=self.ledger,
+            pricing=self.pricing,
+            retry=self.config.llm.retry,
+            cache=ResponseCache(self.config.llm.cache_dir, provider=PROVIDER_NAME),
+        )
+        self.llm = DiagnosisLLM(
+            self.provider,
+            config=DiagnosisModelConfig(model=self.config.judge.model),
+            seed=self.config.seed,
+        )
+        self.studied = SnapshotStore(run_dir / "harness").load(self.manifest.harness_snapshot_id)
+        self.components = self.studied.resolved_manifest().manifest
+        self.claw_repo = CLAW_REPO_DEFAULT.resolve() if CLAW_REPO_DEFAULT.is_dir() else None
+        configure_logging(json_path=run_dir / LOG_FILENAME)
+
+    def taskset(self) -> TaskSet:
+        if self.config.tasks is None:
+            raise ConfigError("run config has no `tasks` section")
+        loader = EvoBenchLoader(
+            dataset_id=self.config.tasks.dataset_id, revision=self.config.tasks.revision
+        )
+        return loader.load(self.config.tasks.split)
+
+
+def cmd_diag_reference(args: argparse.Namespace) -> int:
+    from ahd.diagnosis import genuineness
+    from ahd.diagnosis.pipeline import verify_references
+
+    reference_run = _diag_run_dir(args)
+    if not (reference_run / "references.json").is_file():
+        raise InfraError(f"{args.run_id} is not a reference-mode run", kind="missing_file")
+    diag = _DiagContext(reference_run)
+    records = verify_references(
+        reference_run,
+        taskset=diag.taskset(),
+        llm=diag.llm,
+        prompt_template=genuineness.load_prompt(),
+        claw_repo=diag.claw_repo,
+    )
+    for record in records:
+        print(
+            f"{record.task_id} {record.replicate}/{record.attempt}: {record.verdict} "
+            f"(G1={record.g1} G4={record.g4} G2={record.g2} G3={record.g3})"
+        )
+    print(f"written: {reference_run / 'diagnosis' / 'genuineness.json'}")
+    return EXIT_OK
+
+
+def cmd_diag_align(args: argparse.Namespace) -> int:
+    from ahd.diagnosis.pipeline import align_failures
+
+    run_dir = _diag_run_dir(args)
+    reference_run = _diag_reference_dir(args, run_dir)
+    records = align_failures(run_dir, reference_run)
+    for record in records:
+        a = record.alignment
+        steps = [f"{c.step}:{c.divergence}" for c in a.candidates]
+        print(f"{record.failure_key}: t_exact={a.t_exact} t_class={a.t_class} candidates={steps}")
+    print(f"written: {run_dir / 'diagnosis' / 'alignments.json'}")
+    return EXIT_OK
+
+
+def cmd_diag_replay(args: argparse.Namespace) -> int:
+    from ahd.diagnosis.pipeline import instrument_snapshot, replay_failures
+
+    run_dir = _diag_run_dir(args)
+    reference_run = _diag_reference_dir(args, run_dir)
+    diag = _DiagContext(run_dir)
+    if diag.manifest.run_spec is None:
+        raise ConfigError(f"run {args.run_id} has no run_spec in its manifest")
+    spec = RunSpec.model_validate(diag.manifest.run_spec)
+    judge = AhdJudgeClient(
+        diag.provider,
+        config=diag.config.judge,
+        api_base=diag.config.llm.base_url,
+        seed=diag.config.seed,
+    )
+    scorer = Scorer(
+        judge=judge,
+        ledger=diag.ledger,
+        arm="replay",
+        seed=diag.config.seed,
+        claw_repo=diag.claw_repo,
+    )
+    instrument = instrument_snapshot(run_dir, diag.components)
+    only = tuple(x for x in (args.only or "").split(",") if x)
+    with TraceWriter(run_dir / TRACE_FILENAME, diag.ctx.run_id) as trace:
+        runner = Runner(
+            ctx=diag.ctx,
+            config=diag.config,
+            settings=diag.settings,
+            pricing=diag.pricing,
+            ledger=diag.ledger,
+            scorer=scorer,
+            trace=trace,
+            claw_repo=diag.claw_repo,
+        )
+        results = replay_failures(
+            run_dir,
+            reference_run,
+            runner=runner,
+            spec=spec,
+            studied=diag.studied,
+            instrument=instrument,
+            taskset=diag.taskset(),
+            k=args.k,
+            max_candidates=args.max_candidates,
+            economize=not args.full_arms,
+            only=only,
+        )
+    for result in results:
+        print(
+            f"{result.failure_key}: oracle={result.oracle_step} ({result.oracle_status}) "
+            f"sufficient_set={list(result.sufficient_set)} usd={result.usd:.4f} "
+            f"instrument={result.instrument_snapshot_id}"
+        )
+    print(f"written: {run_dir / 'diagnosis' / 'replays.json'}")
+    return EXIT_OK
+
+
+def cmd_diag_signal(args: argparse.Namespace) -> int:
+    from ahd.diagnosis.pipeline import signal_failures
+    from ahd.diagnosis.signal import load_prompts
+
+    run_dir = _diag_run_dir(args)
+    reference_run = _diag_reference_dir(args, run_dir)
+    diag = _DiagContext(run_dir)
+    result = signal_failures(
+        run_dir,
+        reference_run,
+        taskset=diag.taskset(),
+        manifest=diag.components,
+        harness_snapshot_id=diag.studied.snapshot_id,
+        llm=diag.llm,
+        prompts=load_prompts(),
+    )
+    for d in result.reference:
+        p = d.provenance
+        print(
+            f"[reference] {p.task_id}/{p.replicate}/{p.attempt}: "
+            f"{d.where.component}@{d.where.step} "
+            f"{d.why.cause_label} sev={d.severity} validated={p.oracle_validated}"
+        )
+    for d in result.system:
+        p = d.provenance
+        print(
+            f"[system]    {p.task_id}/{p.replicate}/{p.attempt}: "
+            f"{d.where.component}@{d.where.step} {d.why.cause_label} sev={d.severity}"
+        )
+    for key, error in result.errors.items():
+        print(f"[error]     {key}: {error}")
+    print(f"written: {run_dir / 'diagnosis' / 'diagnoses.json'}")
+    return EXIT_OK
+
+
+def cmd_diag_cluster(args: argparse.Namespace) -> int:
+    from ahd.diagnosis.pipeline import cluster_run
+
+    run_dir = _diag_run_dir(args)
+    diag = _DiagContext(run_dir)
+    instrument_id = None
+    store = SnapshotStore(run_dir / "diagnosis" / "harness")
+    if store.ids():
+        instrument_id = store.ids()[0]
+    clusters, _activity = cluster_run(
+        run_dir,
+        manifest=diag.components,
+        reference_run=args.reference_run,
+        instrument_snapshot_id=instrument_id,
+    )
+    for c in clusters.clusters:
+        print(
+            f"{c.id}: {c.cause_label} @ {c.component} members={len(c.members)} "
+            f"validated={c.oracle_validated_members} sev={c.max_severity}"
+        )
+    print(f"membership sha256: {clusters.membership_sha256}")
+    print(f"written: {run_dir / 'diagnosis' / 'clusters.json'} (manifest updated)")
+    return EXIT_OK
+
+
+def cmd_diag_corrupt(args: argparse.Namespace) -> int:
+    from ahd.diagnosis.pipeline import corrupt_run
+
+    run_dir = _diag_run_dir(args)
+    diag = _DiagContext(run_dir)
+    table, rendered = corrupt_run(run_dir, arm=args.arm, seed=args.seed, manifest=diag.components)
+    for item in rendered:
+        if item.impossible:
+            print(f"{item.cluster_id}: IMPOSSIBLE ({item.impossible})")
+        else:
+            assert item.diagnosis is not None and item.rendered is not None
+            meta = item.diagnosis.where.distance_meta
+            distance = (
+                f" same_layer={meta.same_layer} same_file={meta.same_file} "
+                f"fallback={meta.distance_fallback}"
+                if meta
+                else ""
+            )
+            print(
+                f"{item.cluster_id}: {item.corruption} -> "
+                f"{item.diagnosis.where.component}@{item.diagnosis.where.step}{distance} "
+                f"lengths={item.rendered.field_lengths}"
+            )
+    print(
+        f"assignments: {run_dir / 'diagnosis' / 'assignments' / f'{args.arm}-s{args.seed}.json'} "
+        f"({len(table.assignments)} clusters)"
+    )
+    return EXIT_OK
+
+
+def cmd_diag_leakage(args: argparse.Namespace) -> int:
+    from ahd.diagnosis import leakage
+    from ahd.diagnosis.pipeline import leakage_run
+
+    run_dir = _diag_run_dir(args)
+    diag = _DiagContext(run_dir)
+    report = leakage_run(
+        run_dir, manifest=diag.components, llm=diag.llm, prompt_template=leakage.load_prompt()
+    )
+    print(
+        f"n={report.n} top1={report.top1_rate} top3={report.top3_rate} "
+        f"chance_top1={report.chance_top1:.3f}"
+    )
+    print(f"written: {run_dir / 'diagnosis' / 'leakage.json'}")
+    return EXIT_OK
+
+
+def cmd_diag_cost(args: argparse.Namespace) -> int:
+    from ahd.diagnosis.pipeline import per_failure_cost
+
+    run_dir = _diag_run_dir(args)
+    print(json.dumps(per_failure_cost(run_dir), indent=2))
+    return EXIT_OK
+
+
 def _add_task_source_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--split", default="validation", choices=["validation", "evaluation"])
     parser.add_argument("--dataset", default=EVOBENCH_DATASET_ID)
@@ -572,6 +853,54 @@ def build_parser() -> argparse.ArgumentParser:
     p_sum.add_argument("--config", type=Path, default=Path("configs/runs/example.yaml"))
     p_sum.add_argument("--runs-root", type=Path, default=None)
     p_sum.set_defaults(func=cmd_run_summarize)
+
+    p_diag = sub.add_parser("diag", help="M3 diagnosis over a finished run")
+    diag_sub = p_diag.add_subparsers(dest="diag_command", required=True)
+    for name, func, help_text in (
+        ("reference", cmd_diag_reference, "genuineness verdicts for a reference-mode run"),
+        ("align", cmd_diag_align, "ordered divergence candidates per failure"),
+        ("replay", cmd_diag_replay, "replay validation of the candidates (costs policy calls)"),
+        ("signal", cmd_diag_signal, "reference-arm and system-arm diagnoses"),
+        ("cluster", cmd_diag_cluster, "cluster diagnoses; hash membership into the manifest"),
+        ("corrupt", cmd_diag_corrupt, "deterministic corruption table + rendered diagnoses"),
+        ("leakage", cmd_diag_leakage, "blind localization probe"),
+        ("cost", cmd_diag_cost, "spend by arm and per replayed failure"),
+    ):
+        dp = diag_sub.add_parser(name, help=help_text)
+        dp.add_argument("run_id")
+        dp.add_argument("--config", type=Path, default=Path("configs/runs/example.yaml"))
+        dp.add_argument("--runs-root", type=Path, default=None)
+        if name in ("align", "replay", "signal"):
+            dp.add_argument(
+                "--reference-run", required=True, help="run id of the reference-mode run"
+            )
+        if name == "cluster":
+            dp.add_argument("--reference-run", default=None)
+        if name == "replay":
+            dp.add_argument("--k", type=int, default=3)
+            dp.add_argument("--max-candidates", type=int, default=5)
+            dp.add_argument(
+                "--full-arms",
+                action="store_true",
+                help="run the control arm even when the substitute arm is already insufficient",
+            )
+            dp.add_argument("--only", default=None, help="comma-separated failure keys or task ids")
+        if name == "corrupt":
+            dp.add_argument(
+                "--arm",
+                required=True,
+                choices=[
+                    "reference",
+                    "system",
+                    "shuffled",
+                    "corrupt_where_near",
+                    "corrupt_where_far",
+                    "corrupt_why",
+                    "corrupt_how",
+                ],
+            )
+            dp.add_argument("--seed", type=int, required=True)
+        dp.set_defaults(func=func)
 
     p_runs = sub.add_parser("runs", help="run directory commands")
     runs_sub = p_runs.add_subparsers(dest="runs_command", required=True)

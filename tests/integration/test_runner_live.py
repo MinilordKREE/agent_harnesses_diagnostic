@@ -59,7 +59,12 @@ def _run(
     replicates: int,
     run_id: str,
     max_attempts: int = 5,
+    effort: str | None = None,
+    task_ids: tuple[str, ...] = (TASK_ID,),
+    workers: int = 1,
 ) -> tuple[Any, Ledger, Any]:
+    """``effort`` overrides the paper's ``reasoning_effort: max`` (and caps output tokens) for
+    cheaper runs that are meant to fail; the paper config is asserted only when it is None."""
     settings = load_settings(REPO_ROOT / ".env")
     config = load_run_config(REPO_ROOT / "configs" / "runs" / "example.yaml").model_copy(
         update={"runs_root": tmp_path / "runs"}
@@ -69,15 +74,23 @@ def _run(
     snapshot = snapshot_from_dir(
         SEED, store=SnapshotStore(tmp_path / "store"), manifest=manifest, provenance="seed"
     )
-    task = EvoBenchLoader().load("validation").by_id(TASK_ID)
+    taskset = EvoBenchLoader().load("validation")
+    tasks = [taskset.by_id(task_id) for task_id in task_ids]
     spec = RunSpec.from_config(
         config,
         harness_snapshot_id=snapshot.snapshot_id,
-        task_ids=(TASK_ID,),
+        task_ids=task_ids,
         mode=mode,
         replicates=replicates,
+        workers=workers,
     ).model_copy(update={"reference_max_attempts": max_attempts, "mock_today": "2026-03-02"})
-    assert spec.policy.reasoning_effort == "max" and spec.policy.temperature == 1.0
+    if effort is not None:
+        policy = spec.policy.model_copy(
+            update={"reasoning_effort": effort, "max_output_tokens": 8192}
+        )
+        spec = spec.model_copy(update={"policy": policy})
+    else:
+        assert spec.policy.reasoning_effort == "max" and spec.policy.temperature == 1.0
     ctx = create_run_context(config, runs_root=config.runs_root, run_id=run_id, repo_dir=REPO_ROOT)
     write_manifest(
         ctx,
@@ -111,7 +124,7 @@ def _run(
             trace=trace,
             claw_repo=CLAW_REPO,
         )
-        result = runner.run(spec, [task], snapshot=snapshot)
+        result = runner.run(spec, tasks, snapshot=snapshot)
     return result, ledger, ctx
 
 

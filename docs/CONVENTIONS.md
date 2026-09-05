@@ -221,16 +221,43 @@ never a 0.
   `error_kind: runner_exception` and `runner_exception.txt`, leaves no marker, and does not
   stop the other lanes.
 
+## Diagnosis (M3)
+
+- Vocabulary in `docs/DEFINITIONS.md`. A diagnosis is `(WHERE, WHY, HOW, severity)`; WHERE
+  is a `where_eligible`, patchable component plus a step; WHY/HOW are identifier-stripped at
+  render time (`[path] [routine] [tool] [component] [setting] [layer]`).
+- Only `genuine` references (G1 to G4, `ahd diag reference`) are oracles; `undetermined` never.
+- Divergence candidates are an ordered list (`t_class` first); the oracle step is the earliest
+  candidate that replay validation finds sufficient (substitute >= 2/3, control <= 1/3,
+  k = 3, first 5 candidates). No sufficient candidate -> `oracle_step: unvalidated`, and the
+  cluster is excluded from oracle arms.
+- Replay runs on the instrument copy under `src/ahd/diagnosis/instrument/` (hashed,
+  `provenance: instrument`, never an arm); every `ReplayResult` records the studied snapshot
+  hash and the instrument hash. `unreplayable` and `inapplicable` are statuses, not verdicts.
+  Replay policy rollouts are ledgered with `arm: replay`; diagnosis-side model calls with
+  `arm: diagnosis` (temperature 0, cached, `cache_scope` bound to the evidence hash).
+- Attribution is the rule table R1 to R10 (`ahd/diagnosis/attribution.py`); the model chooses
+  among rule candidates only.
+- Corruption is deterministic: `Random(sha256(cluster_id:arm:seed))`; the assignment table is
+  written to `diagnosis/assignments/<arm>-s<seed>.json` before anything is rendered; a value
+  that cannot differ from the truth is recorded as `impossible`, never reused silently.
+  Distance is reported as `same_layer` / `same_file`, with `distance_fallback` when the
+  requested tier was empty.
+- Rendered diagnoses share one `RenderBudget` per study; field lengths and placeholder counts
+  are recorded next to the text.
+- Cluster membership is hashed into the manifest (`diagnosis.clusters_sha256`, manifest v4).
+
 ## Run directory
 
 `runs/<run_id>/` with `run_id = YYYYMMDDTHHMMSSZ-<6 hex>` unless supplied. Contents:
 
 | File | Writer | Contents |
 |---|---|---|
-| `manifest.json` | `ahd.core.manifest` | schema_version (3), run_id, created_at, seed, config_sha256, config_schema_version, config_path, git_sha, git_dirty, ahd_version, python_version, platform, out_dir, environment (openai/pydantic versions, LibreOffice version, unshare availability, Evo-Bench submodule sha, dataset id and snapshot sha, Claw-Eval commit, policy_sdk_max_retries), harness_snapshot_id, run_spec, web_snapshot_id (reserved, `null` until M2b) |
+| `manifest.json` | `ahd.core.manifest` | schema_version (4; 3 still readable), run_id, created_at, seed, config_sha256, config_schema_version, config_path, git_sha, git_dirty, ahd_version, python_version, platform, out_dir, environment (openai/pydantic versions, LibreOffice version, unshare availability, Evo-Bench submodule sha, dataset id and snapshot sha, Claw-Eval commit, policy_sdk_max_retries), harness_snapshot_id, run_spec, web_snapshot_id (reserved, `null` until M2b), diagnosis (v4: clusters_sha256, reference_run, instrument_snapshot_id) |
 | `harness/<snapshot_id>/` | `ahd.harness.snapshot` | the snapshot the run executed (tree, meta, components, diff) |
 | `rollouts/<task>/<replicate>[/attempt_N]/` | `ahd.runner` | Evo-Bench files + `trajectory.jsonl`, `artifacts/`, `score.json`, `failure.json`, `worker_failure.json` |
 | `summary.json`, `failures.json`, `references.json` | `ahd.runner` | per-source and per-task aggregates; M3's failure input; reference attempts |
+| `diagnosis/` | `ahd.diagnosis.pipeline` | `genuineness.json` (reference runs), `alignments.json`, `harness/` (instrument), `replay/<key>/`, `replays.json`, `diagnoses.json`, `clusters.json`, `activity.json`, `assignments/`, `rendered/`, `leakage.json` |
 | `config.resolved.yaml` | `ahd.core.manifest` | the validated config with defaults applied |
 | `trace.jsonl` | `ahd.core.trace.TraceWriter` | events, envelope below |
 | `ledger.jsonl` | `ahd.llm.ledger.Ledger` | cost and infra/task events |
