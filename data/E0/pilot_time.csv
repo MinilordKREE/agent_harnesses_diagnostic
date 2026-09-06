@@ -1,0 +1,5 @@
+source,rollouts,workers,run_wall_s,rollout_wall_sum_s,reference_wall_s,replay_wall_s,replay_wall_s_per_failure,diagnosis_wall_s
+browsecomp,5,4,3606,9730,812,17500,8750,21165
+hle,5,4,733,1737,397,,,
+gdpval,5,4,962,2579,,,,
+claw_eval,15,4,324,1069,66,1406,469,21050

@@ -1,0 +1,6 @@
+source,b1_rollouts,b2_rollouts,rollout_fail_rate,expected_failures,expected_failed_tasks,policy_usd_b1,policy_usd_b2,judge_usd,reference_usd,replay_usd,diagnosis_usd,total_usd,wall_hours_at_workers
+browsecomp,64,60,0.4000,25.6,25.6,11.9292,11.1837,0.1592,1.8364,55.7120,0.3531,81.1735,33.6
+hle,64,60,0.4000,25.6,25.6,2.7780,2.6043,0.0611,0.6795,0.0000,0.0000,6.1229,3.4
+gdpval,64,60,0.0000,0.0,0.0,3.2846,3.0793,1.3350,0.0000,0.0000,0.0000,7.6989,4.4
+claw_eval,192,180,0.2000,38.4,12.8,1.7905,1.6786,2.1346,0.1210,3.8898,0.2682,9.8827,3.2
+TOTAL,384,360,,89.6,,19.7823,18.5459,3.6898,2.6368,59.6018,0.6213,104.8780,44.6

@@ -1,0 +1,6 @@
+source,failure_key,failure_type,oracle_step,oracle_step_basis,candidates,candidate_statuses,unreplayable_rollouts,drift_reasons,usd
+browsecomp,bc-en-1084__r1__a1,deterministic,2,sufficient,5,1:insufficient;2:sufficient;3:insufficient;4:sufficient;5:unreplayable,3,mutating_or_quoted_output_differs=5,4.3525
+browsecomp,bc-en-772__r1__a1,unreplayable,,unvalidated,5,3:unreplayable;4:unreplayable;5:unreplayable;6:unreplayable;7:unreplayable,15,exit_code_differs=30,0.0000
+claw_eval,claw-T012_expense_report__r1__a1,deterministic,2,sufficient,4,2:sufficient;3:sufficient;4:insufficient;1:insufficient,0,,0.0969
+claw_eval,claw-T012_expense_report__r2__a1,deterministic,2,sufficient,5,2:sufficient;3:sufficient;4:sufficient;5:sufficient;1:insufficient,0,,0.1104
+claw_eval,claw-T012_expense_report__r3__a1,deterministic,2,sufficient,5,1:insufficient;2:sufficient;3:sufficient;4:unreplayable;5:unreplayable,6,exit_code_differs=6,0.0966
