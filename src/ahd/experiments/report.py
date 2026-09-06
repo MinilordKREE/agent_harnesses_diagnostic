@@ -503,6 +503,35 @@ def pilot_tables(spec: E0Spec, runs_root: Path, data_dir: Path) -> tuple[list[Pa
         "total_usd",
         "wall_hours_at_workers",
     ]
+    drift_rows, host_rows = pilot_findings(spec, runs_root)
+    drift_header = [
+        "source",
+        "failure_key",
+        "failure_type",
+        "oracle_step",
+        "oracle_step_basis",
+        "candidates",
+        "candidate_statuses",
+        "unreplayable_rollouts",
+        "drift_reasons",
+        "usd",
+    ]
+    host_header = ["source", "host", "curl_commands"]
+    written.append(write_csv(data_dir / "pilot_drift.csv", drift_header, drift_rows))
+    written.append(write_csv(data_dir / "pilot_web_hosts.csv", host_header, host_rows))
+    md.append(
+        "### E0a pilot: replay verdicts and prefix drift\n\n"
+        "One row per replayed failure; `drift_reasons` counts why prefix re-execution was "
+        "declared unreplayable (exit codes or mutated/quoted outputs differing after masking).\n\n"
+        + _md_table(drift_header, drift_rows)
+    )
+    md.append(
+        "### E0a pilot: web hosts fetched by the seed policy\n\n"
+        "Hosts in `curl`/`wget` commands of the pilot rollouts (top 8 per source). The seed "
+        "harness has no search tool; Serper is only counted when the policy calls it "
+        "explicitly, so `serper_calls_approx` understates web use.\n\n"
+        + _md_table(host_header, host_rows)
+    )
     written.append(write_csv(data_dir / "pilot_cost.csv", cost_header, cost_rows))
     written.append(write_csv(data_dir / "pilot_time.csv", time_header, time_rows))
     written.append(write_csv(data_dir / "pilot_extrapolation.csv", extrap_header, extrap_rows))
@@ -516,6 +545,72 @@ def pilot_tables(spec: E0Spec, runs_root: Path, data_dir: Path) -> tuple[list[Pa
         "failure in that source).\n\n" + _md_table(extrap_header, extrap_rows)
     )
     return written, md
+
+
+def pilot_findings(spec: E0Spec, runs_root: Path) -> tuple[list[list[object]], list[list[object]]]:
+    """Derived only: replay verdicts with drift reasons, and the web hosts the policy fetched."""
+    import re
+
+    drift_rows: list[list[object]] = []
+    host_rows: list[list[object]] = []
+    host_re = re.compile(r"https?://([\w.-]+)")
+    for source in spec.sources:
+        run_dir = runs_root / f"e0a-{source}"
+        if not (run_dir / "manifest.json").is_file():
+            continue
+        for r in replays(run_dir):
+            statuses = ";".join(f"{c.step}:{c.status}" for c in r.candidates)
+            unreplayable = sum(
+                1
+                for c in r.candidates
+                for arm in (c.substitute, c.control)
+                for x in arm.rollouts
+                if x.status == "unreplayable"
+            )
+            reasons: Counter[str] = Counter()
+            for report in r.drift_reports.values():
+                if isinstance(report, dict):
+                    drifts = report.get("drifts")
+                    if isinstance(drifts, list):
+                        for d in drifts:
+                            if isinstance(d, dict):
+                                reasons[str(d.get("reason"))] += 1
+            drift_rows.append(
+                [
+                    source,
+                    r.failure_key,
+                    r.failure_type,
+                    r.oracle_step,
+                    r.oracle_step_basis,
+                    len(r.candidates),
+                    statuses,
+                    unreplayable,
+                    ";".join(f"{k}={v}" for k, v in sorted(reasons.items())),
+                    _num(r.usd),
+                ]
+            )
+        hosts: Counter[str] = Counter()
+        for marker in sorted(run_dir.glob("rollouts/*/*/done.json")):
+            trajectory_path = marker.parent / "trajectory.json"
+            if not trajectory_path.is_file():
+                continue
+            trajectory = read_json(trajectory_path)
+            if not isinstance(trajectory, dict):
+                continue
+            for entry in trajectory.get("trajectory", []):
+                if not isinstance(entry, dict) or entry.get("role") != "tool":
+                    continue
+                call = entry.get("tool_call")
+                if not isinstance(call, dict) or call.get("name") != "run_shell_command":
+                    continue
+                args = call.get("arguments")
+                command = str(args.get("command", "")) if isinstance(args, dict) else ""
+                if "curl" in command or "wget" in command:
+                    for host in set(host_re.findall(command)):
+                        hosts[host] += 1
+        for host, count in sorted(hosts.items(), key=lambda kv: (-kv[1], kv[0]))[:8]:
+            host_rows.append([source, host, count])
+    return drift_rows, host_rows
 
 
 # ---------------------------------------------------------------- E0b tables
