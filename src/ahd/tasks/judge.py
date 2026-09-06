@@ -32,7 +32,7 @@ from typing import Any
 from openai.types.chat import ChatCompletion
 
 from ahd.core.config import JudgeConfig, StrictModel
-from ahd.core.hashing import sha256_of
+from ahd.core.hashing import sha256_of, to_json_value
 from ahd.errors import InfraError
 from ahd.llm.provider import Provider
 from ahd.llm.types import Attribution, ChatMessage, ChatRequest, ChatResponse
@@ -101,8 +101,12 @@ class AhdJudgeClient:
         api_key_env: str = "DEEPSEEK_API_KEY",
         unit_id: str = "unbound",
         cache_scope: str | None = None,
+        arm: str = JUDGE_ARM,
     ) -> None:
         self._provider = provider
+        self.arm = arm
+        """Ledger arm: ``judge`` for the primary instrument, e.g. ``judge_vision`` for a
+        secondary judge whose spend must stay separable."""
         self._judge = config
         self._seed = seed
         self._unit_id = unit_id
@@ -135,6 +139,7 @@ class AhdJudgeClient:
             api_key_env=self.config.api_key_env,
             unit_id=unit_id,
             cache_scope=cache_scope,
+            arm=self.arm,
         )
         bound.requests = self.requests
         bound.responses = self.responses
@@ -172,7 +177,9 @@ class AhdJudgeClient:
                 f"caller asked for temperature {temperature}; judge is fixed to "
                 f"{self.config.temperature}"
             )
-        chat_messages = tuple(_to_chat_message(m) for m in messages)
+        chat_messages = tuple(
+            _to_chat_message(m, multimodal=self._judge.multimodal) for m in messages
+        )
         key = sha256_of(
             {"messages": [m.model_dump() for m in chat_messages], "max_tokens": max_tokens}
         )
@@ -191,7 +198,7 @@ class AhdJudgeClient:
             thinking=self._judge.thinking,
             timeout_s=self._judge.timeout_s,
             use_cache=self._judge.use_cache,
-            attribution=Attribution(arm=JUDGE_ARM, unit_id=self._unit_id),
+            attribution=Attribution(arm=self.arm, unit_id=self._unit_id),
             cache_scope=scope,
         )
         self.requests.append(request)
@@ -200,16 +207,27 @@ class AhdJudgeClient:
         return to_chat_completion(response, model=self.config.model)
 
 
-def _to_chat_message(message: dict[str, Any]) -> ChatMessage:
+def _to_chat_message(message: dict[str, Any], *, multimodal: bool = False) -> ChatMessage:
     role = message.get("role")
     content = message.get("content")
     if role not in ("system", "user", "assistant"):
         raise UnsupportedJudgeRequestError(f"unsupported message role {role!r}")
-    if not isinstance(content, str):
+    if isinstance(content, str):
+        return ChatMessage(role=role, content=content)
+    if not multimodal:
         raise UnsupportedJudgeRequestError(
             "judge accepts text content only; multimodal parts are not supported"
         )
-    return ChatMessage(role=role, content=content)
+    if not isinstance(content, list) or not content:
+        raise UnsupportedJudgeRequestError("multimodal content must be a non-empty list")
+    parts: list[dict[str, Any]] = []
+    for part in content:
+        if not isinstance(part, dict) or part.get("type") not in ("text", "image_url"):
+            raise UnsupportedJudgeRequestError(f"unsupported content part {part!r}"[:200])
+        parts.append(dict(part))
+    converted = to_json_value(parts)
+    assert isinstance(converted, list)
+    return ChatMessage(role=role, content=tuple(p for p in converted if isinstance(p, dict)))
 
 
 class _Completions:

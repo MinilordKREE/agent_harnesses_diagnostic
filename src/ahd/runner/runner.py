@@ -104,6 +104,7 @@ class Runner:
         claw_repo: Path | None,
         reference_template: str | None = None,
         worker_python: str | None = None,
+        secondary_scorers: Mapping[str, Scorer] | None = None,
     ) -> None:
         self._ctx = ctx
         self._config = config
@@ -115,6 +116,10 @@ class Runner:
         self._claw_repo = claw_repo
         self._reference_template = reference_template
         self._worker_python = worker_python
+        self._secondary_scorers: dict[str, Scorer] = dict(secondary_scorers or {})
+        """source benchmark -> a second Scorer whose verdict is attached as
+        ``Score.secondary_judge`` (E0 P1); infra failures of the secondary never fail the
+        rollout, they are recorded on the verdict."""
 
     # ---------------------------------------------------------------- public
 
@@ -703,6 +708,9 @@ class Runner:
             return record.model_copy(
                 update={"error_family": "infra", "error_kind": exc.kind, "error": str(exc)}
             )
+        secondary = self._secondary_scorers.get(task.source_benchmark)
+        if secondary is not None:
+            score = score.model_copy(update={"secondary_judge": secondary.verdict(task, artifacts)})
         atomic_write_text(score_path, score.model_dump_json(indent=2) + "\n")
         return record.model_copy(update={"score": score})
 

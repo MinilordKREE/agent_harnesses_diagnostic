@@ -90,6 +90,9 @@ class JudgeConfig(StrictModel):
     timeout_s: float = Field(default=300.0, gt=0.0)
     use_cache: bool = True
     thinking: bool = False
+    multimodal: bool = False
+    """Accept image parts (E0 P1: the GDPval vision judge). Text-only judges reject them and
+    Evo-Bench's rubric judge falls back to its text-only prompt."""
 
 
 class TaskSourceConfig(StrictModel):

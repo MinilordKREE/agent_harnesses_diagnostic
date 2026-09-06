@@ -34,7 +34,7 @@ from ahd.llm.cache import ResponseCache
 from ahd.llm.ledger import Ledger
 from ahd.llm.pricing import PricingTable
 from ahd.llm.retry import RetryEvent, run_with_retry
-from ahd.llm.types import ChatRequest, ChatResponse, Usage
+from ahd.llm.types import ChatMessage, ChatRequest, ChatResponse, Usage
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ def build_wire_request(request: ChatRequest) -> dict[str, Any]:
     """Translate a :class:`ChatRequest` into ``chat.completions.create`` keyword arguments."""
     body: dict[str, Any] = {
         "model": request.model,
-        "messages": [message.model_dump() for message in request.messages],
+        "messages": [_wire_message(message) for message in request.messages],
         "max_tokens": request.max_tokens,
         "stream": False,
         "extra_body": {"thinking": {"type": "enabled" if request.thinking else "disabled"}},
@@ -202,3 +202,10 @@ class DeepSeekClient:
         if request.use_cache and self._cache is not None:
             self._cache.put(request, response)
         return response
+
+
+def _wire_message(message: ChatMessage) -> dict[str, object]:
+    """OpenAI wire form: text stays a string, multimodal parts become a JSON list."""
+    if isinstance(message.content, str):
+        return {"role": message.role, "content": message.content}
+    return {"role": message.role, "content": [dict(part) for part in message.content]}

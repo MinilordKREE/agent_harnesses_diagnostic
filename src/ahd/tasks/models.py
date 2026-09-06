@@ -135,6 +135,18 @@ class Artifacts(StrictModel):
     rollout_id: str | None = None
 
 
+class SecondaryVerdict(StrictModel):
+    """A second judge's verdict on the same artifact (E0 P1: GDPval vision judge). Never the
+    primary outcome; recorded alongside so agreement can be measured."""
+
+    model: str
+    passed: bool | None
+    value: float | None
+    reason: str
+    judge_meta: dict[str, JsonValue] = Field(default_factory=dict)
+    error: str | None = None
+
+
 class Score(StrictModel):
     passed: bool
     value: float
@@ -145,3 +157,4 @@ class Score(StrictModel):
     """``None`` for a judged verdict; otherwise the task-failure kind (``empty_answer``,
     ``no_deliverable``, ``hackle_violation``) that was also written to the ledger."""
     artifact_sha256: str
+    secondary_judge: SecondaryVerdict | None = None

@@ -94,6 +94,7 @@ def _start_run(
         environment=environment,
         harness_snapshot_id=harness_snapshot_id,
         run_spec=run_spec,
+        judges={"primary": {"*": config.judge.model}},
     )
     configure_logging(json_path=ctx.out_dir / LOG_FILENAME)
     logging.getLogger(__name__).info(

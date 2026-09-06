@@ -105,5 +105,6 @@ trajectories never enter the repository).
 ```
 uv run python scripts/e0_run.py E0a        # pilot: 5 tasks per source + diagnosis of every failure
 uv run python scripts/e0_report.py         # data/E0/*.csv + docs/experiments/E0_REPORT.md
-uv run python scripts/e0_run.py E0b        # after the owner approves sizes and --workers
+uv run python scripts/e0_run.py E0b --preflight   # vision-judge probe + frozen splits (P1, P2)
+uv run python scripts/e0_run.py E0b        # B1..B7 per the amended spec; stops at hard_cap_usd
 ```

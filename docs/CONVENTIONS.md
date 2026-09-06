@@ -160,6 +160,11 @@ The judge is a measurement instrument: fixed, strong, deterministic, cached.
   No proxy, no fork of either codebase.
 - The judge is text-only. GDPval's multimodal rubric prompt falls back to Evo-Bench's own
   text-only path and the fallback is recorded in `judge_meta.judge_detail.image_grading`.
+- A second judge may be registered per source (E0b P1: `deepseek-v4-flash-vision-exp` for
+  GDPval, `JudgeConfig.multimodal: true`, ledger arm `judge_vision`). Its verdict is attached
+  as `Score.secondary_judge` and is never the primary outcome; the judge model per source is
+  recorded in `manifest.judges` (manifest v6). Image data URIs are part of the cache key but
+  are stored redacted (`sha256:`) in cache files.
 - The paper's judge is Qwen3.7-Plus; absolute scores are not comparable to the paper. Reports
   give per-source pass rates and a labelled macro, never the 2:2:1 Overall Score.
 
@@ -267,6 +272,10 @@ never a 0.
   (`e0a-<source>`, `e0b-b1-<source>-p<pass>`, `<run>-ref`) so every stage is resumable.
 - `data/<name>/` holds derived CSV tables only; `docs/experiments/<NAME>_REPORT.md` is
   regenerated from `runs/` and must be byte-identical across regenerations.
+- E0b has a pre-flight (`scripts/e0_run.py E0b --preflight`): pilot checks, one multimodal
+  probe of the secondary judge, and the frozen splits `experiments/splits_v1.json`
+  (validation, eval_dev, heldout per source; pairwise disjoint). Stages stop launching new
+  work at `hard_cap_usd`; finished work is reused on rerun.
 
 ## Run directory
 
@@ -274,7 +283,7 @@ never a 0.
 
 | File | Writer | Contents |
 |---|---|---|
-| `manifest.json` | `ahd.core.manifest` | schema_version (4; 3 still readable), run_id, created_at, seed, config_sha256, config_schema_version, config_path, git_sha, git_dirty, ahd_version, python_version, platform, out_dir, environment (openai/pydantic versions, LibreOffice version, unshare availability, Evo-Bench submodule sha, dataset id and snapshot sha, Claw-Eval commit, policy_sdk_max_retries), harness_snapshot_id, run_spec, web_snapshot_id (reserved, `null` until M2b), diagnosis (v4: clusters_sha256, reference_run, instrument_snapshot_id) |
+| `manifest.json` | `ahd.core.manifest` | schema_version (6; 3 to 5 still readable), run_id, created_at, seed, config_sha256, config_schema_version, config_path, git_sha, git_dirty, ahd_version, python_version, platform, out_dir, environment (openai/pydantic versions, LibreOffice version, unshare availability, Evo-Bench submodule sha, dataset id and snapshot sha, Claw-Eval commit, policy_sdk_max_retries), harness_snapshot_id, run_spec, web_snapshot_id (reserved, `null` until M2b), diagnosis (v4: clusters_sha256, reference_run, instrument_snapshot_id), experiment (v5: role, stage, spec sha, splits sha), judges (v6: primary/secondary judge model per source) |
 | `harness/<snapshot_id>/` | `ahd.harness.snapshot` | the snapshot the run executed (tree, meta, components, diff) |
 | `rollouts/<task>/<replicate>[/attempt_N]/` | `ahd.runner` | Evo-Bench files + `trajectory.jsonl`, `artifacts/`, `score.json`, `failure.json`, `worker_failure.json` |
 | `summary.json`, `failures.json`, `references.json` | `ahd.runner` | per-source and per-task aggregates; M3's failure input; reference attempts |

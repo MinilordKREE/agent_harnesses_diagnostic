@@ -29,15 +29,15 @@ from ahd.core.hashing import JsonValue
 from ahd.core.io import atomic_write_text, read_json
 from ahd.errors import InfraError
 
-MANIFEST_SCHEMA_VERSION: Final = 5
+MANIFEST_SCHEMA_VERSION: Final = 6
 MANIFEST_FILENAME = "manifest.json"
 RESOLVED_CONFIG_FILENAME = "config.resolved.yaml"
 
 
 class Manifest(StrictModel):
-    schema_version: Literal[3, 4, 5]
-    """v4 (M3): ``diagnosis`` block; v5 (E0): ``experiment`` block. Older manifests still
-    load."""
+    schema_version: Literal[3, 4, 5, 6]
+    """v4 (M3): ``diagnosis``; v5 (E0): ``experiment``; v6 (E0b): ``judges``. Older manifests
+    still load."""
     run_id: str
     created_at: datetime
     seed: int
@@ -63,6 +63,9 @@ class Manifest(StrictModel):
     experiment: dict[str, JsonValue] | None = None
     """v5 (E0): ``role`` (calibration | confirmatory), ``stage``, ``spec_path``,
     ``spec_sha256``; set by the experiment scripts so a run can be traced to a frozen spec."""
+    judges: dict[str, JsonValue] | None = None
+    """v6 (E0b): judge model per source, ``{"primary": {source: model}, "secondary": {...}}``
+    (owner rule D7: the judge is part of the instrument and is recorded on every run)."""
 
 
 def build_manifest(
@@ -74,6 +77,7 @@ def build_manifest(
     harness_snapshot_id: str | None = None,
     run_spec: dict[str, JsonValue] | None = None,
     experiment: dict[str, JsonValue] | None = None,
+    judges: dict[str, JsonValue] | None = None,
 ) -> Manifest:
     env = environment or probe_environment(repo_dir=Path.cwd())
     return Manifest(
@@ -95,6 +99,7 @@ def build_manifest(
         harness_snapshot_id=harness_snapshot_id,
         run_spec=run_spec,
         experiment=experiment,
+        judges=judges,
     )
 
 
@@ -107,6 +112,7 @@ def write_manifest(
     harness_snapshot_id: str | None = None,
     run_spec: dict[str, JsonValue] | None = None,
     experiment: dict[str, JsonValue] | None = None,
+    judges: dict[str, JsonValue] | None = None,
 ) -> Path:
     """Write ``manifest.json`` and ``config.resolved.yaml`` atomically; return the manifest path."""
     manifest = build_manifest(
@@ -116,6 +122,7 @@ def write_manifest(
         harness_snapshot_id=harness_snapshot_id,
         run_spec=run_spec,
         experiment=experiment,
+        judges=judges,
     )
     manifest_path = ctx.out_dir / MANIFEST_FILENAME
     atomic_write_text(manifest_path, manifest.model_dump_json(indent=2) + "\n")

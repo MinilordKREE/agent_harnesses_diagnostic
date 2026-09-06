@@ -23,7 +23,7 @@ class FakeProvider:
     def complete(self, request: ChatRequest) -> ChatResponse:
         self.requests.append(request)
         content = self._reply(request) if callable(self._reply) else self._reply
-        prompt_tokens = sum(len(m.content.split()) for m in request.messages)
+        prompt_tokens = sum(len(m.text().split()) for m in request.messages)
         return ChatResponse(
             content=content,
             reasoning=None,

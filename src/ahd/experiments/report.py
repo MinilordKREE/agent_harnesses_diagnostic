@@ -1009,6 +1009,73 @@ def e0b_tables(
             infra_rows,
         )
     )
+    # splits summary (P2)
+    splits_rows: list[list[object]] = []
+    splits_path = Path("experiments/splits_v1.json")
+    if splits_path.is_file():
+        raw_splits = read_json(splits_path)
+        if isinstance(raw_splits, dict) and isinstance(raw_splits.get("sources"), dict):
+            for source, groups in sorted(raw_splits["sources"].items()):
+                if isinstance(groups, dict):
+                    for split_name in ("validation", "eval_dev", "heldout"):
+                        ids = groups.get(split_name)
+                        splits_rows.append(
+                            [source, split_name, len(ids) if isinstance(ids, list) else 0]
+                        )
+    written.append(write_csv(data_dir / "splits.csv", ["source", "split", "tasks"], splits_rows))
+    md.append("### E0b: frozen splits\n\n" + _md_table(["source", "split", "tasks"], splits_rows))
+    # gdpval dual scoring (P1): primary text verdict vs secondary vision verdict, every artifact
+    rejudge_rows: list[list[object]] = []
+    agree = 0
+    compared = 0
+    for run_dir in sorted(runs_root.glob("e0b-b*-gdpval-p*")):
+        for record in rollouts(run_dir):
+            if record.score is None or record.score.secondary_judge is None:
+                continue
+            sec = record.score.secondary_judge
+            detail = sec.judge_meta.get("judge_detail")
+            grading = detail.get("image_grading") if isinstance(detail, dict) else None
+            used = grading.get("used") if isinstance(grading, dict) else None
+            same = None if sec.passed is None else (sec.passed == record.score.passed)
+            if same is not None:
+                compared += 1
+                agree += int(same)
+            rejudge_rows.append(
+                [
+                    run_dir.name,
+                    record.task_id,
+                    record.replicate,
+                    int(record.score.passed),
+                    _num(record.score.value),
+                    sec.model,
+                    "" if sec.passed is None else int(sec.passed),
+                    _num(sec.value),
+                    "" if used is None else int(bool(used)),
+                    "" if same is None else int(same),
+                    sec.error or "",
+                ]
+            )
+    rejudge_header = [
+        "run_id",
+        "task_id",
+        "replicate",
+        "text_passed",
+        "text_value",
+        "vision_model",
+        "vision_passed",
+        "vision_value",
+        "vision_used_images",
+        "agree",
+        "vision_error",
+    ]
+    written.append(write_csv(data_dir / "gdpval_rejudge.csv", rejudge_header, rejudge_rows))
+    extras["vision_compared"] = compared
+    extras["vision_disagreement"] = (1 - agree / compared) if compared else None
+    md.append(
+        "### E0b: gdpval text vs vision judge (every artifact)\n\n"
+        f"compared={compared}, disagreement={_num(extras['vision_disagreement'])}\n\n"
+        + _md_table(rejudge_header, rejudge_rows)
+    )
     # judge calibration
     jc_path = runs_root / "judge_calibration.json"
     jc_rows: list[list[object]] = []
@@ -1017,41 +1084,47 @@ def e0b_tables(
         rows_: list[dict[str, Any]] = (
             [r for r in raw if isinstance(r, dict)] if isinstance(raw, list) else []
         )
-        judged = [
-            r for r in rows_ if r.get("error") is None and r.get("pro_bypass_passed") is not None
-        ]
-        self_c = (
-            sum(1 for r in judged if r["pro_bypass_passed"] == r["original_passed"]) / len(judged)
-            if judged
+        text_ok = [r for r in rows_ if r.get("text_bypass_passed") is not None]
+        text_sc = (
+            sum(1 for r in text_ok if r["text_bypass_passed"] == r["original_passed"])
+            / len(text_ok)
+            if text_ok
             else None
         )
-        flash = (
-            sum(1 for r in judged if r.get("flash_passed") == r["original_passed"]) / len(judged)
-            if judged
+        vision_ok = [
+            r
+            for r in rows_
+            if r.get("vision_bypass_passed") is not None
+            and r.get("original_secondary_passed") is not None
+        ]
+        vision_sc = (
+            sum(1 for r in vision_ok if r["vision_bypass_passed"] == r["original_secondary_passed"])
+            / len(vision_ok)
+            if vision_ok
             else None
+        )
+        released = (
+            "none: the Evo-Bench snapshot releases expected answers and rubrics, "
+            "no per-trajectory judge labels"
+        )
+        jc_rows.append(
+            ["text (deepseek-v4-pro)", len(rows_), len(text_ok), _num(text_sc), released]
         )
         jc_rows.append(
             [
-                len(rows_),
-                len(judged),
-                _num(self_c),
-                _num(flash),
-                "none: the Evo-Bench snapshot releases expected answers and rubrics, "
-                "no per-trajectory judge labels",
+                "vision (gdpval secondary)",
+                sum(1 for r in rows_ if r.get("source") == "gdpval"),
+                len(vision_ok),
+                _num(vision_sc),
+                released,
             ]
         )
-        extras["judge_self_consistency"] = self_c
-        extras["judge_flash_agreement"] = flash
+        extras["judge_self_consistency"] = text_sc
+        extras["judge_self_consistency_vision"] = vision_sc
     written.append(
         write_csv(
             data_dir / "judge_calibration.csv",
-            [
-                "artifacts",
-                "rejudged",
-                "self_consistency",
-                "flash_vs_pro_agreement",
-                "released_labels",
-            ],
+            ["judge", "artifacts", "rejudged", "self_consistency", "released_labels"],
             jc_rows,
         )
     )
@@ -1118,13 +1191,7 @@ def e0b_tables(
     md.append(
         "### E0b: judge calibration\n\n"
         + _md_table(
-            [
-                "artifacts",
-                "rejudged",
-                "self_consistency",
-                "flash_vs_pro_agreement",
-                "released_labels",
-            ],
+            ["judge", "artifacts", "rejudged", "self_consistency", "released_labels"],
             jc_rows,
         )
     )
@@ -1201,6 +1268,26 @@ def decisions(
             ]
         )
     n_primary = sum(c.primary_clusters for c in calib.values())
+    included = [
+        str(r[0]).split(":")[1] for r in rows if str(r[0]).startswith("D1:") and r[2] == "enters E2"
+    ]
+    n_primary_included = sum(calib[s_].primary_clusters for s_ in included if s_ in calib)
+    if "D1prime" in spec.decision_rules:
+        minimum = int(th.get("min_total_primary_clusters", 8))
+        verdict = (
+            "E2 starts"
+            if n_primary_included >= minimum
+            else "pivot required: (i) policy reasoning_effort low (deviation stated) or "
+            "(ii) build M2b web freeze and re-admit browsecomp"
+        )
+        rows.append(
+            [
+                "D1prime",
+                f"primary_clusters_in_included_sources={n_primary_included} (min {minimum}); "
+                f"included={included}",
+                verdict,
+            ]
+        )
     if spec.owner_budget_usd is None or cost_per_rollout is None:
         rows.append(
             [
@@ -1236,17 +1323,42 @@ def decisions(
                 ]
             )
     sc = extras.get("judge_self_consistency")
-    fl = extras.get("judge_flash_agreement")
     if sc is None:
         rows.append(["D6", "no judge calibration", "not evaluable"])
     else:
         vote = "2-of-3 judge vote" if sc < th["judge_self_consistency_min"] else "single judge"
-        both = (
-            "; report both judges"
-            if fl is not None and fl < th["judge_cross_agreement_min"]
-            else ""
+        rows.append(
+            ["D6", f"text_self_consistency={_num(sc)} (Flash re-judge replaced by P1)", vote]
         )
-        rows.append(["D6", f"self_consistency={_num(sc)} flash_agreement={_num(fl)}", vote + both])
+    if "D7" in spec.decision_rules:
+        vsc = extras.get("judge_self_consistency_vision")
+        dis = extras.get("vision_disagreement")
+        if vsc is None or dis is None:
+            rows.append(
+                [
+                    "D7",
+                    "no vision calibration or no dual-scored gdpval artifacts",
+                    "not evaluable: text judge stays primary",
+                ]
+            )
+        else:
+            choose_vision = vsc >= th["judge_self_consistency_min"] and dis >= th.get(
+                "vision_disagreement_min", 0.10
+            )
+            rows.append(
+                [
+                    "D7",
+                    f"vision_self_consistency={_num(vsc)} "
+                    f"text_vs_vision_disagreement={_num(dis)} "
+                    f"compared={extras.get('vision_compared')}",
+                    "gdpval E2 primary judge = vision (deepseek-v4-flash-vision-exp)"
+                    if choose_vision
+                    else (
+                        "gdpval E2 primary judge = text (deepseek-v4-pro); "
+                        "vision reported as secondary"
+                    ),
+                ]
+            )
     return rows
 
 

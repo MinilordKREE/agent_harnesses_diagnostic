@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -289,6 +289,7 @@ def replay_failures(
     resume: bool = False,
     subdir: str = "replay",
     workers: int = 1,
+    before_each: Callable[[], None] | None = None,
 ) -> list[ReplayResult]:
     """``subdir`` = ``replay`` writes ``replays.json`` / ``failure_types.json``; any other
     name (E0's ``replay_full``) writes ``replays_<subdir>.json`` and leaves the main files."""
@@ -312,6 +313,8 @@ def replay_failures(
             only and record.failure_key not in only and record.task_id not in only
         ):
             continue
+        if before_each is not None:
+            before_each()  # e.g. the E0 hard budget cap; raises to stop before more spend
         task = taskset.by_id(record.task_id)
         failed, failed_dir = _failed_trajectory(run_dir, record)
         reference = _trajectory(

@@ -190,7 +190,7 @@ def test_leakage_probe(manifest: ComponentManifest) -> None:
     seen: list[str] = []
 
     def reply(request: ChatRequest) -> str:
-        seen.append(request.messages[-1].content)
+        seen.append(request.messages[-1].text())
         return json.dumps({"top3": ["system_prompt", "task_prompt", "loop"]})
 
     report = probe(

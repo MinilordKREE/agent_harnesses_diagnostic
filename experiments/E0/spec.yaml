@@ -1,7 +1,8 @@
 # EXPERIMENT E0 - calibration (Study 0). Frozen before running; numbers are filled into
 # data/E0/ and docs/experiments/E0_REPORT.md by scripts/e0_report.py after the runs.
 # The decision rules below are applied mechanically by ahd.experiments.report; they are the
-# owner's text verbatim.
+# owner's text verbatim. Amended 2026-09-06 with the owner's E0b decisions (P1, P2, scope,
+# D1', D7, D4 budget); E0a ran under the previous revision (sha recorded in its manifests).
 schema_version: 1
 experiment: E0
 role: calibration
@@ -13,16 +14,25 @@ judge:
   model: deepseek-v4-pro
   temperature: 0.0
   cached: true            # retry salt as in M3.1
+judges:                   # P1: judge model per source; recorded in every manifest
+  primary:
+    browsecomp: deepseek-v4-pro
+    hle: deepseek-v4-pro
+    gdpval: deepseek-v4-pro          # text-only; primary for E0b tables
+    claw_eval: deepseek-v4-pro
+  secondary:
+    gdpval: deepseek-v4-flash-vision-exp   # multimodal (page images + extracted text), temp 0, cached
 mock_today: "2026-03-02"
 replay:
   k: 3
   max_candidates: 5
   economize: true
 reference_max_attempts: 5
-workers: 4                # unless E0a shows otherwise
+workers: 4                # default; E0b overrides per source below
 config: configs/runs/e0.yaml
 runs_root: runs/E0
-owner_budget_usd: null    # TODO-owner: D4 needs this before E0b runs
+owner_budget_usd: 600.0   # D4 (owner: "suggested 600")
+hard_cap_usd: 100.0       # E0b: stop launching work at this spend (ledgers under runs/E0/e0b-*)
 sources: [browsecomp, hle, gdpval, claw_eval]
 E0a:
   per_source: 5           # stratified sample from validation, seed 0 -> 20 tasks
@@ -30,18 +40,30 @@ E0a:
   replicates: benchmark   # 1 replicate; Claw's 3 trials as the benchmark defines
   diagnosis_on_failures: [reference, genuineness, alignment, replay, signal, leakage]
 E0b:
-  B1_baseline: {split: validation, tasks: all, passes: 2}
-  B2_heldout: {split: evaluation, per_source: 30, seed: 0, passes: 2, frozen: experiments/heldout_v1.json}
-  B3_failure_mining: every failed rollout of B1
+  preflight:
+    P1_gdpval_judge: {pilot_libreoffice_version: "7.3.7.2", pilot_image_grading_attempted: true, vision_probe: one multimodal call at temperature 0}
+    P2_splits: {file: experiments/splits_v1.json, eval_dev_per_source: 24, heldout_per_source: 30, seed: 0, disjoint: true}
+  workers_by_source: {claw_eval: 8, gdpval: 8, hle: 8, browsecomp: 4}
+  scope:
+    claw_eval: {B1: mining_pool, B2: heldout, diagnosis: true, passes: 2}
+    gdpval:    {B1: mining_pool, B2: heldout, diagnosis: true, passes: 2, secondary_judge: deepseek-v4-flash-vision-exp}
+    hle:       {B1: validation, B2: none, diagnosis: false, passes: 2, note: "no oracle (references are shortcuts); recorded as such"}
+    browsecomp: {B1: validation_sample, B1_n: 10, B1_seed: 0, B2: none, diagnosis: false, passes: 2}
+  B3_failure_mining: every failed rollout of B1 (claw_eval, gdpval)
   B4_references: {max_attempts: 5, genuineness: true}
-  B5_replay: {k: 3, max_candidates: 5, economize: true, full_arms_subset: {n: 30, seed: 0, stratified_by: source}}
+  B5_replay: {k: 3, max_candidates: 5, economize: true, full_arms_subset: {n: 30, seed: 0, stratified_by: source, or_all_if_fewer: true}}
   B6_clusters: {vocabulary: configs/prompts/diagnosis/causes.yaml, corruption_seed: 0, leakage: true}
-  B7_judge_calibration: {n_artifacts: 50, self_consistency: cache_bypass, cross_judge: deepseek-v4-flash, released_labels: report_if_any}
+  B7_judge_calibration: {n_artifacts: 50, pooled_from: [claw_eval, gdpval], self_consistency: cache_bypass_per_judge, text_vs_vision: gdpval, released_labels: report_if_any}
   B8_render: {clusters_per_source: 3, arms: [reference, system, corrupt_where_near, corrupt_where_far, corrupt_why, corrupt_how, shuffled]}
 decision_rules:
   D1: >
-    Source enters E2 iff: seed pass rate on validation in [0.10, 0.90] (headroom both ways)
-    AND per-source A/A |delta| <= 5 points AND >= 6 clusters with >= 2 members.
+    Source enters E2 iff: seed pass rate on the mining pool (validation U eval_dev) in
+    [0.10, 0.90] (headroom both ways) AND per-source A/A |delta| <= 5 points AND >= 6
+    clusters with >= 2 members. (Amended: computed on the mining pool, not validation alone.)
+  D1prime: >
+    E2 starts only if total primary clusters across included sources >= 8; otherwise pivot
+    options are exactly: (i) policy reasoning_effort low (deviation stated), (ii) build M2b
+    web freeze and re-admit browsecomp. No other option may be added.
   D2: >
     A cluster is E2-primary iff >= 2 members, >= 1 genuine reference, oracle step validated
     (deterministic) or manifestation-based (stochastic), and near+far+why+how+all all
@@ -58,15 +80,24 @@ decision_rules:
     case 45/source (re-sampled from the same frozen seed, superset).
   D6: >
     Judge: if self-consistency < 0.90, the E2 primary outcome uses a 2-of-3 judge vote
-    (cost recorded); if Flash-vs-Pro agreement < 0.80, report both judges in E2.
+    (cost recorded). (The Flash text re-judge is replaced by P1; cross-judge agreement is
+    the gdpval text-vs-vision comparison under D7.)
+  D7: >
+    The E2 primary judge for gdpval is the vision judge iff its self-consistency >= 0.90 AND
+    text-vs-vision disagreement >= 10% of artifacts (i.e. the text judge is missing rubric
+    evidence); otherwise the text judge stays primary and the vision verdict is reported as
+    secondary. Whichever is chosen is frozen in the E2 spec and applies to every gdpval arm;
+    Claw keeps V4 Pro. Judge model per source is recorded in every manifest.
 thresholds:            # the numbers inside the rules, as data
   pass_rate_min: 0.10
   pass_rate_max: 0.90
   aa_band_max_points: 5.0
   min_clusters_with_two: 6
+  min_total_primary_clusters: 8
   search_band_ratio_max: 2.0
   heldout_per_source: 30
   heldout_per_source_wide: 45
   judge_self_consistency_min: 0.90
   judge_cross_agreement_min: 0.80
+  vision_disagreement_min: 0.10
   e2_arms: 8

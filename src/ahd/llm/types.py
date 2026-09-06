@@ -18,9 +18,28 @@ from ahd.core.hashing import JsonValue, to_json_value
 type Role = Literal["system", "user", "assistant"]
 
 
+type ContentPart = dict[str, JsonValue]
+"""One OpenAI-style content part: ``{"type": "text", "text": ...}`` or
+``{"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}``."""
+
+
 class ChatMessage(StrictModel):
     role: Role
-    content: str
+    content: str | tuple[ContentPart, ...]
+    """Plain text, or the multimodal list form (E0 vision judge for GDPval page images)."""
+
+    def text(self) -> str:
+        """The textual part(s) only; used for token estimates and logs."""
+        if isinstance(self.content, str):
+            return self.content
+        return "\n".join(
+            str(part.get("text", "")) for part in self.content if part.get("type") == "text"
+        )
+
+    def has_images(self) -> bool:
+        return not isinstance(self.content, str) and any(
+            part.get("type") == "image_url" for part in self.content
+        )
 
 
 class Attribution(StrictModel):

@@ -88,8 +88,31 @@ class ResponseCache:
             key=key,
             provider=self.provider,
             created_at=datetime.now(UTC),
-            request=request.cache_payload(),
+            request=redact_images(request.cache_payload()),
             response=response.model_copy(update={"cached": False}),
         )
         atomic_write_text(path, entry.model_dump_json(indent=2) + "\n")
         return path
+
+
+def redact_images(payload: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    """The stored copy of a request replaces image data URIs by their sha256 (the cache KEY is
+    computed over the full payload, so hits are unaffected; the file just stays small)."""
+    import hashlib
+
+    def walk(value: JsonValue) -> JsonValue:
+        if isinstance(value, dict):
+            out: dict[str, JsonValue] = {}
+            for k, v in value.items():
+                if k == "url" and isinstance(v, str) and v.startswith("data:image/"):
+                    out[k] = "sha256:" + hashlib.sha256(v.encode()).hexdigest()
+                else:
+                    out[k] = walk(v)
+            return out
+        if isinstance(value, list):
+            return [walk(v) for v in value]
+        return value
+
+    redacted = walk(payload)
+    assert isinstance(redacted, dict)
+    return redacted

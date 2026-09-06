@@ -53,8 +53,8 @@ def test_spec_loads_and_matches_the_config() -> None:
     spec = load_spec(SPEC)
     assert spec.replay.k == 3 and spec.replay.max_candidates == 5 and spec.replay.economize
     assert spec.reference_max_attempts == 5 and spec.workers == 4
-    assert set(spec.decision_rules) == {"D1", "D2", "D3", "D4", "D5", "D6"}
-    assert spec.owner_budget_usd is None  # D4 stays undecided until the owner fills it in
+    assert {"D1", "D1prime", "D2", "D3", "D4", "D5", "D6", "D7"} == set(spec.decision_rules)
+    assert spec.owner_budget_usd == 600.0  # D4 (owner: suggested 600)
     config = load_run_config(REPO_ROOT / "configs" / "runs" / "e0.yaml")
     _check_spec_matches_config(spec, config)
     broken = config.model_copy(update={"run": config.run.model_copy(update={"workers": 2})})
@@ -135,10 +135,13 @@ def test_decision_rules() -> None:
     assert by_rule["D1:claw_eval"] == "excluded"
     assert by_rule["D2:gdpval"].startswith("5 primary")
     assert by_rule["D3:browsecomp"] == "descriptive only"
-    assert by_rule["D4"] == "not evaluable: owner_budget_usd not set"
+    assert by_rule["D4"] == "k=3"  # 8 arms x 10 primary x 3 x 0.05 = 12 USD <= 600
+    unset = spec.model_copy(update={"owner_budget_usd": None})
+    rows0 = {str(r[0]): str(r[2]) for r in decisions(unset, calib, {}, cost_per_rollout=0.05)}
+    assert rows0["D4"] == "not evaluable: owner_budget_usd not set"
     assert by_rule["D5:browsecomp"] == "45/source" and by_rule["D5:gdpval"] == "30/source"
     assert by_rule["D5:claw_eval"] == "not evaluable"
-    assert by_rule["D6"] == "2-of-3 judge vote; report both judges"
+    assert by_rule["D6"] == "2-of-3 judge vote"  # the Flash re-judge clause was replaced by P1
     budgeted = spec.model_copy(update={"owner_budget_usd": 100.0})
     rows2 = {str(r[0]): str(r[2]) for r in decisions(budgeted, calib, {}, cost_per_rollout=0.05)}
     assert rows2["D4"] == "k=3"  # 8 arms x 10 primary x 3 x 0.05 = 12 USD <= 100

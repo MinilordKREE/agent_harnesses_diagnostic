@@ -41,7 +41,7 @@ from ahd.tasks.claw import (
     read_dispatches,
 )
 from ahd.tasks.judge import AhdJudgeClient, patched_claw_judge
-from ahd.tasks.models import Artifacts, Score, Task
+from ahd.tasks.models import Artifacts, Score, SecondaryVerdict, Task
 
 logger = logging.getLogger(__name__)
 
@@ -335,6 +335,23 @@ class Scorer:
         assert isinstance(meta, dict)
         score = self._task_failure(task, "empty_answer", reason, artifact=artifact, meta=meta)
         return score.model_copy(update={"value": partial.value if partial is not None else 0.0})
+
+    def verdict(self, task: Task, artifacts: Artifacts) -> SecondaryVerdict:
+        """Score as a secondary judge: infra errors become part of the verdict."""
+        model = self._judge.config.model
+        try:
+            score = self.score(task, artifacts)
+        except InfraError as exc:
+            return SecondaryVerdict(
+                model=model, passed=None, value=None, reason=str(exc), error=exc.kind
+            )
+        return SecondaryVerdict(
+            model=model,
+            passed=score.passed,
+            value=score.value,
+            reason=score.reason,
+            judge_meta=score.judge_meta,
+        )
 
     def score(self, task: Task, artifacts: Artifacts) -> Score:
         if task.excluded:
