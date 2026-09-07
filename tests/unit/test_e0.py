@@ -202,3 +202,4 @@ def test_full_arms_subset_is_deterministic(tmp_path: Path) -> None:
     assert first == second
     total = sum(len(v) for v in first.values())
     assert total == 30 and len(first["c"]) == 3  # small sources contribute all their failures
+    assert all(k.count("/") == 2 for keys in first.values() for k in keys)  # failure_key format

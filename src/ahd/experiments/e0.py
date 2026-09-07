@@ -875,8 +875,9 @@ def full_arms_subset(ctx: E0Context, run_dirs: Sequence[Path]) -> dict[str, tupl
     per_source: dict[str, list[tuple[Path, str]]] = {}
     for run_dir in run_dirs:
         for f in task_failures(run_dir):
+            # keys in the alignment/replay failure_key format (task/replicate/attempt)
             per_source.setdefault(f.source_benchmark, []).append(
-                (run_dir, f"{f.task_id}__{f.replicate}__a{f.attempt}")
+                (run_dir, f"{f.task_id}/{f.replicate}/{f.attempt}")
             )
     total = sum(len(v) for v in per_source.values())
     chosen: dict[str, list[str]] = {}
