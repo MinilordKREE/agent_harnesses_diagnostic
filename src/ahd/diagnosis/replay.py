@@ -152,9 +152,12 @@ def prefix_payload(
     arm: ArmName,
     substitute: dict[str, Any] | None,
     recorded_workspace: str | None,
+    reference_workspace: str | None = None,
 ) -> dict[str, Any]:
     """The ``_ahd_replay`` block: prefix actions with recorded outputs, prefix context, the
-    resume step and (substitute arm) the reference's assistant message."""
+    resume step and (substitute arm) the reference's assistant message. ``rewrite_paths`` are
+    the absolute workspace paths of the failed run and of the reference run; the instrument
+    replaces them by the replay workspace inside commands (policies write absolute paths)."""
     entries = [e for e in failed.get("trajectory", []) if isinstance(e, dict)]
     later_texts: dict[int, list[str]] = {}
     for e in entries:
@@ -215,9 +218,13 @@ def prefix_payload(
     prefix_messages = messages[:boundary]
     prefix_trajectory = [e for e in entries if int(e.get("step", 0)) < step]
     masks: list[list[str]] = []
-    if recorded_workspace:
-        masks.append([re.escape(recorded_workspace), "<workspace>"])
+    rewrite: list[str] = []
+    for path in (recorded_workspace, reference_workspace):
+        if path:
+            masks.append([re.escape(path), "<workspace>"])
+            rewrite.append(path)
     return {
+        "rewrite_paths": rewrite,
         "arm": arm,
         "resume_step": step,
         "prefix_actions": prefix_actions,
@@ -478,6 +485,7 @@ class Replayer:
         reference_trajectory: dict[str, Any],
         recorded_workspace: str | None,
         drift_reports: dict[str, JsonValue],
+        reference_workspace: str | None = None,
     ) -> CandidateReplay:
         """Both arms of one candidate (substitute first; control only when economize allows)."""
         substitute_message = reference_message_at(reference_trajectory, candidate.step)
@@ -497,6 +505,7 @@ class Replayer:
             arm="substitute",
             substitute=substitute_message,
             recorded_workspace=recorded_workspace,
+            reference_workspace=reference_workspace,
         )
         substitute = self._arm(
             task,
@@ -521,6 +530,7 @@ class Replayer:
                 arm="control",
                 substitute=None,
                 recorded_workspace=recorded_workspace,
+                reference_workspace=reference_workspace,
             )
             control = self._arm(
                 task,
@@ -558,6 +568,7 @@ class Replayer:
         replicate: str,
         attempt: int,
         recorded_workspace: str | None,
+        reference_workspace: str | None = None,
     ) -> ReplayResult:
         key = f"{task.id}__{replicate}__a{attempt}"
         drift_reports: dict[str, JsonValue] = {}
@@ -572,6 +583,7 @@ class Replayer:
                     failed_trajectory=failed_trajectory,
                     reference_trajectory=reference_trajectory,
                     recorded_workspace=recorded_workspace,
+                    reference_workspace=reference_workspace,
                     drift_reports=drift_reports,
                 )
                 for candidate in candidates
@@ -588,6 +600,7 @@ class Replayer:
                         failed_trajectory=failed_trajectory,
                         reference_trajectory=reference_trajectory,
                         recorded_workspace=recorded_workspace,
+                        reference_workspace=reference_workspace,
                         drift_reports=drift_reports,
                     )
                     for candidate in candidates

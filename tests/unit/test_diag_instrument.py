@@ -104,3 +104,52 @@ def test_tree_hash_tracks_workspace_mutation(loop: Any, tmp_path: Path) -> None:
     (ws / "outputs" / "report.md").write_text("x", encoding="utf-8")
     assert loop._tree_hash(ws) != before
     assert loop._tree_hash(tmp_path / "missing") == loop._tree_hash(tmp_path / "missing2")
+
+
+def test_replay_remaps_recorded_workspace_paths(loop: Any, tmp_path: Path) -> None:
+    """A policy writes with the absolute path of its workspace; the replay must act on the
+    replay workspace, never on the recorded run's (or the reference run's) tree."""
+    replay = {
+        "rewrite_paths": ["/runs/E0/study/workspaces/t/r1", "/runs/E0/study-ref/workspaces/t/r1"]
+    }
+    ws = tmp_path / "replay-ws"
+    cmd = (
+        "mkdir -p /runs/E0/study-ref/workspaces/t/r1/outputs && "
+        "rm -rf /runs/E0/study-ref/workspaces/t/r1"
+    )
+    assert loop._remap_paths(cmd, replay, ws) == f"mkdir -p {ws}/outputs && rm -rf {ws}"
+    args = loop._remap_arguments(
+        {"command": "ls /runs/E0/study/workspaces/t/r1", "description": 2}, replay, ws
+    )
+    assert args == {"command": f"ls {ws}", "description": 2}
+    substitute = {
+        "role": "assistant",
+        "content": "writing to /runs/E0/study-ref/workspaces/t/r1/report.md",
+        "tool_calls": [
+            {
+                "id": "c1",
+                "type": "function",
+                "function": {
+                    "name": "run_shell_command",
+                    "arguments": (
+                        '{"command": "cat > /runs/E0/study-ref/workspaces/t/r1/report.md"}'
+                    ),
+                },
+            }
+        ],
+    }
+    remapped = loop._remap_substitute(substitute, replay, ws)
+    assert (
+        remapped["tool_calls"][0]["function"]["arguments"]
+        == f'{{"command": "cat > {ws}/report.md"}}'
+    )
+    assert remapped["content"] == f"writing to {ws}/report.md"
+    user = {
+        "role": "user",
+        "content": "Task workspace (your working directory): /runs/E0/study/workspaces/t/r1",
+    }
+    assert loop._remap_message(user, replay, ws)["content"].endswith(str(ws))
+    assert (
+        loop._remap_message({"role": "tool", "content": "no paths here"}, replay, ws)["content"]
+        == "no paths here"
+    )

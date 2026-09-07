@@ -27,7 +27,7 @@ from ahd.core.config import JudgeConfig, RunConfig, StrictModel, load_run_config
 from ahd.core.context import create_run_context, git_state
 from ahd.core.environment import probe_environment
 from ahd.core.hashing import JsonValue, sha256_file, to_json_value
-from ahd.core.io import atomic_write_text, read_json, read_text
+from ahd.core.io import atomic_write_text, lock_tree, read_json, read_text
 from ahd.core.manifest import load_run_context, read_manifest, write_manifest
 from ahd.core.trace import TRACE_FILENAME, TraceWriter
 from ahd.diagnosis import genuineness, leakage
@@ -521,6 +521,9 @@ def diagnose_run(
             prompt_template=genuineness.load_prompt(),
             claw_repo=ctx.claw_repo,
         )
+    # the reference run is complete: make it read-only so a replayed policy command with an
+    # absolute path cannot delete it (happened to e0b-b1-claw_eval-p1-ref on 2026-09-07)
+    lock_tree(ref_dir)
     if not (out / "alignments.json").is_file():
         align_failures(run_dir, ref_dir)
     alignments = load_alignments(run_dir)

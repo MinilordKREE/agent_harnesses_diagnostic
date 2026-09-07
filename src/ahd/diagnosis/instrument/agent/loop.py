@@ -92,6 +92,58 @@ def _mask(text: str, extra_masks: list, workspace: str = "") -> str:
     return re.sub(r"\s+", " ", out).strip()
 
 
+def _remap_paths(text: str, replay: dict, workspace: Path) -> str:
+    """Absolute paths of the recorded run's workspace (and of the reference run's, for the
+    substituted action) become the replay workspace: the policy meant "my workspace". Without
+    this a replayed `rm -rf <other run>` or `cat > <other run>/...` acts on another run's tree
+    (observed 2026-09-07: a replay deleted a whole reference run directory)."""
+    out = text
+    for old_path in replay.get("rewrite_paths", []) or []:
+        if old_path:
+            out = out.replace(str(old_path), str(workspace))
+    return out
+
+
+def _remap_arguments(arguments: dict, replay: dict, workspace: Path) -> dict:
+    return {k: (_remap_paths(v, replay, workspace) if isinstance(v, str) else v)
+            for k, v in arguments.items()}
+
+
+def _remap_message(message: dict, replay: dict, workspace: Path) -> dict:
+    """Remap workspace paths inside a restored context message (content and tool arguments)."""
+    out = dict(message)
+    if isinstance(out.get("content"), str):
+        out["content"] = _remap_paths(out["content"], replay, workspace)
+    elif isinstance(out.get("content"), list):
+        parts = []
+        for part in out["content"]:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                part = dict(part); part["text"] = _remap_paths(part["text"], replay, workspace)
+            parts.append(part)
+        out["content"] = parts
+    if out.get("tool_calls"):
+        out = _remap_substitute(out, replay, workspace)
+    return out
+
+
+def _remap_substitute(substitute: dict, replay: dict, workspace: Path) -> dict:
+    out = dict(substitute)
+    calls = []
+    for call in out.get("tool_calls") or []:
+        call = dict(call)
+        fn = dict(call.get("function") or {})
+        args = fn.get("arguments")
+        if isinstance(args, str):
+            fn["arguments"] = _remap_paths(args, replay, workspace)
+        call["function"] = fn
+        calls.append(call)
+    if calls:
+        out["tool_calls"] = calls
+    if isinstance(out.get("content"), str):
+        out["content"] = _remap_paths(out["content"], replay, workspace)
+    return out
+
+
 def _replay_prefix(replay: dict, state: RolloutState, components: HarnessComponents,
                    command_timeout_seconds: int) -> dict:
     """Re-execute the prefix actions for state; compare with the recorded outputs."""
@@ -101,7 +153,8 @@ def _replay_prefix(replay: dict, state: RolloutState, components: HarnessCompone
     extra_masks = replay.get("masks", [])
     for item in replay.get("prefix_actions", []):
         action = Action(tool_call_id=str(item.get("tool_call_id", "")), name=str(item["name"]),
-                        arguments=dict(item.get("arguments") or {}))
+                        arguments=_remap_arguments(dict(item.get("arguments") or {}), replay,
+                                                   state.workspace))
         before = _tree_hash(state.workspace) if action.name == "run_shell_command" else None
         result = components.router.execute(action, state, command_timeout=command_timeout_seconds,
                                            remaining_seconds=None)
@@ -194,7 +247,10 @@ def run_policy_loop(
             state.runtime_errors.append(f"unreplayable prefix: {len(report['drifts'])} drift(s)")
             state.log("STOP unreplayable prefix", logging.WARNING)
             return state.finalize()
-        state.messages = [dict(m) for m in replay["prefix_messages"]]
+        # the recorded context names the original absolute workspace (the seed prompt hands the
+        # policy its path); remap it so the continuation works in the replay workspace
+        state.messages = [_remap_message(dict(m), replay, state.workspace)
+                          for m in replay["prefix_messages"]]
         state.trajectory = []
         for entry in replay.get("prefix_trajectory", []):
             restored = dict(entry)
@@ -208,6 +264,8 @@ def run_policy_loop(
             state.trajectory.append(restored)
         start_step = int(replay["resume_step"])
         substitute = replay.get("substitute")
+        if substitute:
+            substitute = _remap_substitute(substitute, replay, state.workspace)
         state.log(f"replay prefix restored: {len(state.messages)} messages, resume at step "
                   f"{start_step}, arm={replay.get('arm')}")
     # ---------------------------------------------------------------------------

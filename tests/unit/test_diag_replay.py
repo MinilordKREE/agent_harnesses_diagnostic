@@ -88,6 +88,16 @@ def test_prefix_payload_boundary_and_flags() -> None:
     assert all(int(e["step"]) < 4 for e in payload["prefix_trajectory"])
     assert payload["substitute"]["tool_calls"][0]["function"]["name"] == "todo_update_task"
     assert payload["masks"] == [["/ws/rec", "<workspace>"]]
+    assert payload["rewrite_paths"] == ["/ws/rec"]
+    both = prefix_payload(
+        failed,
+        step=4,
+        arm="substitute",
+        substitute=reference_message_at(reference, 4),
+        recorded_workspace="/ws/rec",
+        reference_workspace="/ws/ref",
+    )
+    assert both["rewrite_paths"] == ["/ws/rec", "/ws/ref"] and len(both["masks"]) == 2
     control = prefix_payload(
         failed, step=4, arm="control", substitute=None, recorded_workspace=None
     )

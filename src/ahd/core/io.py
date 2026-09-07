@@ -82,3 +82,27 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
             raise InfraError(f"JSONL line {lineno} in {path} is not an object", kind="corrupt_file")
         records.append(parsed)
     return records
+
+
+def lock_tree(root: Path) -> int:
+    """Remove write permission from every file and directory under ``root`` (and ``root``).
+
+    Finished reference runs are locked after genuineness so that a policy command running
+    inside a replay (same user, no sandbox) cannot delete or overwrite them; returns the number
+    of entries changed. Idempotent.
+    """
+    import stat
+
+    changed = 0
+    for path in sorted(root.rglob("*"), reverse=True):
+        mode = path.stat().st_mode
+        new_mode = mode & ~(stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH)
+        if new_mode != mode:
+            path.chmod(new_mode)
+            changed += 1
+    mode = root.stat().st_mode
+    new_mode = mode & ~(stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH)
+    if new_mode != mode:
+        root.chmod(new_mode)
+        changed += 1
+    return changed

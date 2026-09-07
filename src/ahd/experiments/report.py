@@ -1408,6 +1408,18 @@ def build_report(*, spec_path: Path, data_dir: Path, report_path: Path) -> list[
                 if r["policy_usd_per_rollout"] and r["judge_usd_per_rollout"]
             ]
         cost_per_rollout = statistics.fmean(values) if values else None
+    incidents_path = runs_root / "incidents.jsonl"
+    if incidents_path.is_file():
+        inc_rows: list[list[object]] = []
+        for line in incidents_path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                r = json.loads(line)
+                inc_rows.append([str(r.get("ts", ""))[:16], r.get("kind", ""), r.get("detail", "")])
+        written.append(write_csv(data_dir / "incidents.csv", ["ts", "kind", "detail"], inc_rows))
+        md.append(
+            "## Incidents and operator interventions\n\n"
+            + _md_table(["ts", "kind", "detail"], inc_rows)
+        )
     rows = decisions(spec, calib, extras, cost_per_rollout=cost_per_rollout)
     written.append(write_csv(data_dir / "decisions.csv", ["rule", "observed", "decision"], rows))
     md.append(

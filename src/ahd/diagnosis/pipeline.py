@@ -317,11 +317,10 @@ def replay_failures(
             before_each()  # e.g. the E0 hard budget cap; raises to stop before more spend
         task = taskset.by_id(record.task_id)
         failed, failed_dir = _failed_trajectory(run_dir, record)
-        reference = _trajectory(
-            rollout_dir(
-                reference_run, record.task_id, record.reference_replicate, record.reference_attempt
-            )
+        reference_dir = rollout_dir(
+            reference_run, record.task_id, record.reference_replicate, record.reference_attempt
         )
+        reference = _trajectory(reference_dir)
         results.append(
             replayer.validate(
                 task,
@@ -331,6 +330,7 @@ def replay_failures(
                 replicate=record.replicate,
                 attempt=record.attempt,
                 recorded_workspace=_recorded_workspace(failed_dir),
+                reference_workspace=_recorded_workspace(reference_dir),
             )
         )
     if subdir != "replay":
