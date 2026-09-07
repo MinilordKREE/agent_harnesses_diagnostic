@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -316,11 +317,37 @@ class Replayer:
         self.resume = resume
         self.subdir = subdir
         self.workers = max(1, workers)
-        """The k rollouts of one arm run concurrently (bounded); candidates stay sequential so
-        the economize decision keeps its order."""
+        """Global bound on concurrent replay rollouts: candidates run in parallel and each
+        arm's k rollouts run in parallel, all gated by one semaphore of this size. The
+        economize decision stays per candidate (substitute arm before its control arm)."""
+        self._slots = threading.Semaphore(self.workers)
         """``replay`` normally; E0 uses ``replay_full`` for the --full-arms headroom subset."""
 
     def _one(
+        self,
+        task: Task,
+        *,
+        key: str,
+        replicate: str,
+        candidate: Candidate,
+        arm: ArmName,
+        index: int,
+        payload: dict[str, Any],
+        drift_reports: dict[str, JsonValue],
+    ) -> ReplayRollout:
+        with self._slots:
+            return self._one_unbounded(
+                task,
+                key=key,
+                replicate=replicate,
+                candidate=candidate,
+                arm=arm,
+                index=index,
+                payload=payload,
+                drift_reports=drift_reports,
+            )
+
+    def _one_unbounded(
         self,
         task: Task,
         *,
@@ -440,6 +467,87 @@ class Replayer:
             inapplicable=sum(r.status == "inapplicable" for r in rollouts),
         )
 
+    def _candidate(
+        self,
+        task: Task,
+        *,
+        key: str,
+        replicate: str,
+        candidate: Candidate,
+        failed_trajectory: dict[str, Any],
+        reference_trajectory: dict[str, Any],
+        recorded_workspace: str | None,
+        drift_reports: dict[str, JsonValue],
+    ) -> CandidateReplay:
+        """Both arms of one candidate (substitute first; control only when economize allows)."""
+        substitute_message = reference_message_at(reference_trajectory, candidate.step)
+        if substitute_message is None:
+            # the reference had already finished: nothing to substitute
+            return CandidateReplay(
+                step=candidate.step,
+                divergence=candidate.divergence,
+                substitute=ArmResult(arm="substitute", k=self.k, skipped=True),
+                control=ArmResult(arm="control", k=self.k, skipped=True),
+                status="skipped",
+                usd=0.0,
+            )
+        sub_payload = prefix_payload(
+            failed_trajectory,
+            step=candidate.step,
+            arm="substitute",
+            substitute=substitute_message,
+            recorded_workspace=recorded_workspace,
+        )
+        substitute = self._arm(
+            task,
+            key=key,
+            replicate=replicate,
+            candidate=candidate,
+            arm="substitute",
+            payload=sub_payload,
+            drift_reports=drift_reports,
+        )
+        status: CandidateStatus
+        if substitute.unreplayable == self.k:
+            control = ArmResult(arm="control", k=self.k, skipped=True)
+            status = "unreplayable"
+        elif self.economize and substitute.pass_fraction < SUBSTITUTE_MIN:
+            control = ArmResult(arm="control", k=self.k, skipped=True)
+            status = "insufficient"
+        else:
+            ctl_payload = prefix_payload(
+                failed_trajectory,
+                step=candidate.step,
+                arm="control",
+                substitute=None,
+                recorded_workspace=recorded_workspace,
+            )
+            control = self._arm(
+                task,
+                key=key,
+                replicate=replicate,
+                candidate=candidate,
+                arm="control",
+                payload=ctl_payload,
+                drift_reports=drift_reports,
+            )
+            sufficient = (
+                substitute.pass_fraction >= SUBSTITUTE_MIN
+                and control.conservative_pass_fraction <= CONTROL_MAX
+            )
+            status = "sufficient" if sufficient else "insufficient"
+        usd = sum((r.usd or 0.0) for r in substitute.rollouts) + sum(
+            (r.usd or 0.0) for r in control.rollouts
+        )
+        return CandidateReplay(
+            step=candidate.step,
+            divergence=candidate.divergence,
+            substitute=substitute,
+            control=control,
+            status=status,
+            usd=usd,
+        )
+
     def validate(
         self,
         task: Task,
@@ -453,80 +561,38 @@ class Replayer:
     ) -> ReplayResult:
         key = f"{task.id}__{replicate}__a{attempt}"
         drift_reports: dict[str, JsonValue] = {}
-        results: list[CandidateReplay] = []
-        for candidate in alignment.candidates[: self.max_candidates]:
-            substitute_message = reference_message_at(reference_trajectory, candidate.step)
-            if substitute_message is None:
-                # the reference had already finished: nothing to substitute
-                results.append(
-                    CandidateReplay(
-                        step=candidate.step,
-                        divergence=candidate.divergence,
-                        substitute=ArmResult(arm="substitute", k=self.k, skipped=True),
-                        control=ArmResult(arm="control", k=self.k, skipped=True),
-                        status="skipped",
-                        usd=0.0,
-                    )
-                )
-                continue
-            sub_payload = prefix_payload(
-                failed_trajectory,
-                step=candidate.step,
-                arm="substitute",
-                substitute=substitute_message,
-                recorded_workspace=recorded_workspace,
-            )
-            substitute = self._arm(
-                task,
-                key=key,
-                replicate=replicate,
-                candidate=candidate,
-                arm="substitute",
-                payload=sub_payload,
-                drift_reports=drift_reports,
-            )
-            status: CandidateStatus
-            if substitute.unreplayable == self.k:
-                control = ArmResult(arm="control", k=self.k, skipped=True)
-                status = "unreplayable"
-            elif self.economize and substitute.pass_fraction < SUBSTITUTE_MIN:
-                control = ArmResult(arm="control", k=self.k, skipped=True)
-                status = "insufficient"
-            else:
-                ctl_payload = prefix_payload(
-                    failed_trajectory,
-                    step=candidate.step,
-                    arm="control",
-                    substitute=None,
-                    recorded_workspace=recorded_workspace,
-                )
-                control = self._arm(
+        candidates = list(alignment.candidates[: self.max_candidates])
+        if self.workers == 1 or len(candidates) <= 1:
+            results = [
+                self._candidate(
                     task,
                     key=key,
                     replicate=replicate,
                     candidate=candidate,
-                    arm="control",
-                    payload=ctl_payload,
+                    failed_trajectory=failed_trajectory,
+                    reference_trajectory=reference_trajectory,
+                    recorded_workspace=recorded_workspace,
                     drift_reports=drift_reports,
                 )
-                sufficient = (
-                    substitute.pass_fraction >= SUBSTITUTE_MIN
-                    and control.conservative_pass_fraction <= CONTROL_MAX
-                )
-                status = "sufficient" if sufficient else "insufficient"
-            usd = sum((r.usd or 0.0) for r in substitute.rollouts) + sum(
-                (r.usd or 0.0) for r in control.rollouts
-            )
-            results.append(
-                CandidateReplay(
-                    step=candidate.step,
-                    divergence=candidate.divergence,
-                    substitute=substitute,
-                    control=control,
-                    status=status,
-                    usd=usd,
-                )
-            )
+                for candidate in candidates
+            ]
+        else:
+            with ThreadPoolExecutor(max_workers=min(self.workers, len(candidates))) as pool:
+                futures = [
+                    pool.submit(
+                        self._candidate,
+                        task,
+                        key=key,
+                        replicate=replicate,
+                        candidate=candidate,
+                        failed_trajectory=failed_trajectory,
+                        reference_trajectory=reference_trajectory,
+                        recorded_workspace=recorded_workspace,
+                        drift_reports=drift_reports,
+                    )
+                    for candidate in candidates
+                ]
+                results = [f.result() for f in futures]
         sufficient_set = tuple(c.step for c in results if c.status == "sufficient")
         if not sufficient_set and not any(
             not c.control.skipped and c.control.scored > 0 for c in results
