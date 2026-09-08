@@ -6,7 +6,7 @@ import pytest
 
 from ahd.diagnosis import corrupt
 from ahd.diagnosis.cluster import ClusterSet, cluster
-from ahd.diagnosis.schema import Diagnosis
+from ahd.diagnosis.schema import Diagnosis, How, Why
 from ahd.harness.components import ComponentManifest
 from tests.conftest import REPO_ROOT
 from tests.diag_fixtures import diagnosis
@@ -212,3 +212,112 @@ def test_distance_covariates(manifest: ComponentManifest) -> None:
     assert corrupt.distance(manifest, "system_prompt", "task_prompt") == (True, False)
     assert corrupt.distance(manifest, "loop", "error_handling") == (True, True)
     assert corrupt.distance(manifest, "budget", "verifier") == (False, False)
+
+
+def test_where_decoys_are_never_in_the_rule_candidate_set(manifest: ComponentManifest) -> None:
+    """M3.2 decoy exclusion: the full candidate set of the attribution record is excluded."""
+    candidates = ("system_prompt", "task_prompt", "context_window", "planner")  # R1
+    cs = cluster([diagnosis(task_id="a", component="system_prompt", candidates=candidates, step=4)])
+    activity = _activity(cs, manifest)
+    for arm in ("corrupt_where_near", "corrupt_where_far", "coherent_wrong"):
+        for seed in range(6):
+            table = corrupt.assign(
+                cs.clusters,
+                arm=arm,
+                seed=seed,
+                manifest=manifest,
+                activity=activity,
+                sufficient={cs.clusters[0].id: {4}},
+            )
+            a = table.assignments[0]
+            assert a.impossible is None and a.where is not None
+            assert a.where.component not in candidates
+            assert a.excluded == tuple(sorted(candidates))
+            assert not set(a.where.candidates) & set(candidates)
+    # the pre-M3.2 rule (audit only) excludes the chosen component alone
+    old = corrupt.assign(
+        cs.clusters,
+        arm="corrupt_where_near",
+        seed=0,
+        manifest=manifest,
+        activity=activity,
+        sufficient={cs.clusters[0].id: {4}},
+        exclude_candidate_set=False,
+    )
+    assert old.assignments[0].excluded == ("system_prompt",)
+    assert set(old.assignments[0].where.candidates) & set(candidates)  # type: ignore[union-attr]
+
+
+def test_coherent_arm_prefers_validated_negative_steps(manifest: ComponentManifest) -> None:
+    cs = cluster([diagnosis(task_id="a", component="system_prompt", step=3)])
+    cid = cs.clusters[0].id
+    activity = {cid: {spec.id: {2, 5} for spec in manifest.components}}
+    with_negative = corrupt.assign(
+        cs.clusters,
+        arm="coherent_wrong",
+        seed=0,
+        manifest=manifest,
+        activity=activity,
+        sufficient={cid: {3}},
+        negative={cid: {5}},
+    ).assignments[0]
+    assert with_negative.where is not None and with_negative.where.step == 5
+    assert with_negative.step_basis == "validated_negative"
+    assert with_negative.where.rule == "coherent_wrong" and with_negative.corruption == "coherent"
+    assert with_negative.where.component != "system_prompt"
+    fallback = corrupt.assign(
+        cs.clusters,
+        arm="coherent_wrong",
+        seed=0,
+        manifest=manifest,
+        activity=activity,
+        sufficient={cid: {2}},
+        negative={cid: {3}},  # negative step 3 is active for nobody
+    ).assignments[0]
+    assert fallback.where is not None and fallback.where.step == 5
+    assert fallback.step_basis == "not_sufficient"
+    impossible = corrupt.assign(
+        cs.clusters,
+        arm="coherent_wrong",
+        seed=0,
+        manifest=manifest,
+        activity={cid: {spec.id: {2} for spec in manifest.components}},
+        sufficient={cid: {2}},
+    ).assignments[0]
+    assert impossible.impossible is not None and "validated-negative" in impossible.impossible
+
+
+def test_apply_coherent_uses_the_generated_record(manifest: ComponentManifest) -> None:
+    cs = cluster([diagnosis(task_id="a", component="system_prompt", step=3)])
+    c = cs.clusters[0]
+    activity = {c.id: {spec.id: {1, 2, 4} for spec in manifest.components}}
+    a = corrupt.assign(
+        cs.clusters,
+        arm="coherent_wrong",
+        seed=1,
+        manifest=manifest,
+        activity=activity,
+        sufficient={c.id: {3}},
+        negative={c.id: {4}},
+    ).assignments[0]
+    assert a.where is not None
+    with pytest.raises(ValueError, match="no coherent-wrong text"):
+        corrupt.apply(c.diagnosis_reference, a, cs.clusters)
+    record = corrupt.CoherentWrong(
+        cluster_id=c.id,
+        seed=1,
+        generation_seed=0,
+        component=a.where.component,
+        step=a.where.step or 0,
+        step_basis="validated_negative",
+        why=Why(cause_label="argument_error", mechanism_sentence="The router mangled it."),
+        how=How(fix_hint="Validate arguments before dispatch."),
+        severity="medium",
+    )
+    applied = corrupt.apply(c.diagnosis_reference, a, cs.clusters, generated={c.id: record})
+    assert applied.where == a.where and applied.why == record.why and applied.how == record.how
+    assert applied.severity == "medium" and applied.corruption == "coherent"
+    assert applied.source == "corrupted" and applied.provenance.task_id == "a"
+    wrong = record.model_copy(update={"step": (a.where.step or 0) + 1})
+    with pytest.raises(ValueError, match="was generated for"):
+        corrupt.apply(c.diagnosis_reference, a, cs.clusters, generated={c.id: wrong})

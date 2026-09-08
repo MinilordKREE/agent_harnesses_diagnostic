@@ -741,6 +741,76 @@ def cmd_diag_leakage(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_diag_coherent(args: argparse.Namespace) -> int:
+    """M3.2: COH-WRONG texts + plausibility parity (run-level loop)."""
+    from ahd.diagnosis import coherent
+    from ahd.diagnosis.pipeline import coherent_run
+    from ahd.diagnosis.schema import load_causes
+
+    run_dir = _diag_run_dir(args)
+    diag = _DiagContext(run_dir)
+    record = coherent_run(
+        run_dir,
+        seed=args.seed,
+        manifest=diag.components,
+        llm=diag.llm,
+        prompts=coherent.load_prompts(),
+        vocabulary=load_causes(),
+        min_members=args.min_members,
+        max_regenerations=args.max_regenerations,
+    )
+    for round_ in record.rounds:
+        par = round_.parity
+        summary = (
+            f"n={par.n} mean_diff={par.mean_difference} p={par.sign_test_p} ok={par.ok}"
+            if par is not None
+            else "not judged"
+        )
+        print(f"round {round_.generation_seed}: {len(round_.generated)} texts; parity {summary}")
+    print(
+        f"final generation seed {record.final_generation_seed}; parity_ok={record.parity_ok}; "
+        f"written: {run_dir / 'diagnosis' / f'coherent_wrong-s{args.seed}.json'}"
+    )
+    return EXIT_OK
+
+
+def cmd_diag_probe(args: argparse.Namespace) -> int:
+    """M3.2: privileged-information probe over the rendered arms."""
+    from ahd.diagnosis import probe as probe_module
+    from ahd.diagnosis.llm import DiagnosisLLM, DiagnosisModelConfig
+    from ahd.diagnosis.pipeline import PROBE_ARMS, probe_run
+
+    run_dir = _diag_run_dir(args)
+    diag = _DiagContext(run_dir)
+    reference_run = _diag_reference_dir(args, run_dir)
+    taskset = diag.taskset()
+    llm = DiagnosisLLM(
+        diag.provider,
+        config=DiagnosisModelConfig(model=diag.config.judge.model),
+        seed=diag.config.seed,
+        arm=probe_module.PROBE_ARM,
+    )
+    report = probe_run(
+        run_dir,
+        reference_run,
+        seed=args.seed,
+        taskset=taskset,
+        pool_ids=taskset.ids(),
+        llm=llm,
+        prompt_template=probe_module.load_prompt(),
+        arms=tuple(args.arm) if args.arm else PROBE_ARMS,
+    )
+    by_arm: dict[str, list[float]] = {}
+    for r in report.records:
+        if r.error is None:
+            by_arm.setdefault(r.arm, []).append(float(r.hit_top1))
+    for arm, hits in sorted(by_arm.items()):
+        print(f"[{arm}] n={len(hits)} task_top1={sum(hits) / len(hits):.3f}")
+    print(f"pool={report.pool_size} chance_top1={report.chance_top1:.3f}")
+    print(f"written: {run_dir / 'diagnosis' / f'probe-s{args.seed}.json'}")
+    return EXIT_OK
+
+
 def cmd_diag_cost(args: argparse.Namespace) -> int:
     from ahd.diagnosis.pipeline import per_failure_cost
 
@@ -872,16 +942,25 @@ def build_parser() -> argparse.ArgumentParser:
         ("cluster", cmd_diag_cluster, "cluster diagnoses; hash membership into the manifest"),
         ("corrupt", cmd_diag_corrupt, "deterministic corruption table + rendered diagnoses"),
         ("leakage", cmd_diag_leakage, "blind localization probe"),
+        ("coherent", cmd_diag_coherent, "M3.2: COH-WRONG texts + plausibility parity"),
+        ("probe", cmd_diag_probe, "M3.2: privileged-information probe over the rendered arms"),
         ("cost", cmd_diag_cost, "spend by arm and per replayed failure"),
     ):
         dp = diag_sub.add_parser(name, help=help_text)
         dp.add_argument("run_id")
         dp.add_argument("--config", type=Path, default=Path("configs/runs/example.yaml"))
         dp.add_argument("--runs-root", type=Path, default=None)
-        if name in ("align", "replay", "signal"):
+        if name in ("align", "replay", "signal", "probe"):
             dp.add_argument(
                 "--reference-run", required=True, help="run id of the reference-mode run"
             )
+        if name in ("coherent", "probe"):
+            dp.add_argument("--seed", type=int, default=0, help="corruption seed of the tables")
+        if name == "coherent":
+            dp.add_argument("--min-members", type=int, default=2)
+            dp.add_argument("--max-regenerations", type=int, default=3)
+        if name == "probe":
+            dp.add_argument("--arm", action="append", default=None)
         if name == "signal":
             dp.add_argument(
                 "--allow-unvalidated",

@@ -53,7 +53,10 @@ def test_spec_loads_and_matches_the_config() -> None:
     spec = load_spec(SPEC)
     assert spec.replay.k == 3 and spec.replay.max_candidates == 5 and spec.replay.economize
     assert spec.reference_max_attempts == 5 and spec.workers == 4
-    assert {"D1", "D1prime", "D2", "D3", "D4", "D5", "D6", "D7"} == set(spec.decision_rules)
+    assert {"D1", "D1prime", "D2", "D3", "D4", "D5", "D6", "D7", "D8"} == set(spec.decision_rules)
+    assert spec.E0c.get("status") == "not_run" and spec.e0d_cap() == 40.0  # M3.2 addendum
+    assert spec.e0d_order() == ("B", "C", "D", "A") and spec.corruption_seed() == 0
+    assert spec.thresholds["delta_meaningful_points"] == 3.0  # D8
     assert spec.owner_budget_usd == 600.0  # D4 (owner: suggested 600)
     config = load_run_config(REPO_ROOT / "configs" / "runs" / "e0.yaml")
     _check_spec_matches_config(spec, config)

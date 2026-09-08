@@ -124,9 +124,16 @@ def diagnosis(
     fix: str = "Re-prompt once before accepting a content-only reply.",
     severity: Severity = "high",
     validated: bool = True,
+    candidates: tuple[str, ...] | None = None,
 ) -> Diagnosis:
     return Diagnosis(
-        where=Where(component=component, step=step, candidates=(component,), rule="R4"),
+        where=Where(
+            component=component,
+            step=step,
+            candidates=candidates or (component,),
+            rule="R4",
+            attribution="llm" if candidates and len(candidates) > 1 else "rule",
+        ),
         why=Why(cause_label=cause, mechanism_sentence=mechanism),
         how=How(fix_hint=fix),
         severity=severity,

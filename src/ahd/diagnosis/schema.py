@@ -24,15 +24,25 @@ from ahd.harness.components import LAYERS, ComponentManifest
 
 type Severity = Literal["low", "medium", "high", "critical"]
 type Source = Literal["reference", "system", "shuffled", "corrupted"]
-type Corruption = Literal["none", "where", "why", "how", "all"]
+type Corruption = Literal["none", "where", "why", "how", "all", "coherent"]
+"""``coherent``: the COH-WRONG arm (M3.2), a decoy WHERE with a mechanism and fix hint generated
+to be consistent with it."""
 type Attribution = Literal["rule", "llm"]
 type Tier = Literal["near", "far", "any"]
-type FailureType = Literal["deterministic", "stochastic", "unrepairable", "unreplayable"]
+type FailureType = Literal[
+    "deterministic", "stochastic", "unrepairable", "unreplayable", "unresolved"
+]
 """Replay-validation verdict on a failure (owner decision, M3.1): ``deterministic`` = some
 candidate step is sufficient; ``stochastic`` = re-sampling from the prefix passes at every
 tested candidate (a policy-level random event that the harness let through); ``unrepairable``
 = neither the reference action nor re-sampling rescues the run; ``unreplayable`` = no arm could
-be scored."""
+be scored; ``unresolved`` (M3.2) = some candidate stayed undecided at the end of the adaptive
+replay schedule and none was validated-positive."""
+type Verdict = Literal["positive", "negative", "unresolved", "unreplayable", "skipped"]
+"""Per-candidate replay verdict under the adaptive schedule (M3.2, docs/DEFINITIONS.md)."""
+type StepBasis = Literal["validated_negative", "not_sufficient"]
+"""How a decoy step was chosen (M3.2): a validated-negative candidate step, or (fallback) any
+active step outside the sufficient set."""
 type OracleBasis = Literal["sufficient", "manifestation", "unvalidated"]
 
 OTHER_CAUSE = re.compile(r"^other:\s*[\w][\w \-/,'.]{2,60}$")

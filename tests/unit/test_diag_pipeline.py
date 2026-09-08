@@ -14,19 +14,25 @@ from ahd.core.config import RunConfig, load_run_config
 from ahd.core.context import create_run_context
 from ahd.core.io import read_json
 from ahd.core.manifest import read_manifest, write_manifest
-from ahd.diagnosis import genuineness, leakage
+from ahd.diagnosis import coherent, genuineness, leakage
+from ahd.diagnosis import probe as probe_module
 from ahd.diagnosis.corrupt import ARM_CORRUPTION
 from ahd.diagnosis.llm import DiagnosisLLM
 from ahd.diagnosis.pipeline import (
+    PROBE_ARMS,
     align_failures,
     cluster_run,
+    coherent_run,
     corrupt_run,
     leakage_run,
     load_clusters,
+    load_coherent,
     per_failure_cost,
+    probe_run,
     signal_failures,
     verify_references,
 )
+from ahd.diagnosis.schema import load_causes
 from ahd.diagnosis.signal import load_prompts
 from ahd.harness.components import ComponentManifest
 from ahd.harness.snapshot import SnapshotStore, snapshot_from_dir
@@ -264,6 +270,28 @@ def _reply(request: ChatRequest) -> str:
         return json.dumps({"g2": True, "g3": True, "explanation": "executed"})
     if "Which component does this diagnosis" in prompt:
         return json.dumps({"top3": ["completion_policy", "system_prompt", "verifier"]})
+    if "An engineer has already localised the fault" in prompt:
+        forced = prompt.split("component `")[1].split("`")[0]
+        return json.dumps(
+            {
+                "severity": "medium",
+                "cause_label": "argument_error",
+                "mechanism": f"The {forced} mangled the call before dispatch.",
+                "fix_hint": f"Make {forced} validate the call.",
+            }
+        )
+    if "Diagnosis A:" in prompt:
+        return json.dumps({"A": 4, "B": 4})
+    if "You see one diagnosis of a failed agent run" in prompt:
+        first_task = prompt.split("one-line description):\n- ")[1].split(":")[0].strip()
+        first_category = prompt.split("Answer categories in use:\n- ")[1].split("\n")[0].strip()
+        return json.dumps(
+            {
+                "task_top3": [first_task],
+                "required_tools": ["todo_list_tasks"],
+                "answer_category": first_category,
+            }
+        )
     # error signal: pick the first candidate offered
     candidates_block = prompt.split("Candidate harness components")[1]
     first = candidates_block.split("\n- ")[1].split(":")[0].strip()
@@ -355,6 +383,13 @@ def test_pipeline_end_to_end(
 
     results = corrupt_run(run, seed=7, manifest=manifest)
     assert set(results) == set(ARM_CORRUPTION)
+    # COH-WRONG has an assignment but no text until `coherent_run`; it renders nothing and says so
+    for item in results["coherent_wrong"][1]:
+        assert item.impossible is not None and "not generated" in item.impossible
+    for assignment in results["coherent_wrong"][0].assignments:
+        assert assignment.where is not None and assignment.step_basis == "not_sufficient"
+        assert assignment.where.component not in assignment.excluded
+    del results["coherent_wrong"]
     for arm, (table, rendered) in results.items():
         assert (run / "diagnosis" / "assignments" / f"{arm}-s7.json").is_file()
         assert len(rendered) == 3
@@ -388,6 +423,51 @@ def test_pipeline_end_to_end(
     assert report.n == 3 and report.top1_rate == pytest.approx(
         2 / 3
     )  # two completion_policy clusters
+
+    # M3.2: COH-WRONG generation + parity (every cluster is a singleton here: min_members=1)
+    coherent_set = coherent_run(
+        run,
+        seed=7,
+        manifest=manifest,
+        llm=llm,
+        prompts=coherent.load_prompts(),
+        vocabulary=load_causes(),
+        min_members=1,
+    )
+    assert len(coherent_set.eligible) == 3 and len(coherent_set.rounds) == 1
+    assert coherent_set.parity_ok and coherent_set.final_generation_seed == 0
+    parity_result = coherent_set.rounds[0].parity
+    assert parity_result is not None and parity_result.n == 3 and parity_result.ties == 3
+    assert load_coherent(run, 7).keys() == set(coherent_set.eligible)
+    rendered_coh = corrupt_run(run, seed=7, manifest=manifest, arms=("coherent_wrong",))
+    for item in rendered_coh["coherent_wrong"][1]:
+        assert item.impossible is None and item.rendered is not None and item.diagnosis is not None
+        assert item.diagnosis.corruption == "coherent" and "mangled" in item.rendered.text
+        assert "[component]" in item.rendered.text.split("WHY")[1]  # identifiers stripped
+    for path in (run / "diagnosis" / "rendered" / "coherent_wrong-s7").glob("*.md"):
+        assert path.read_text(encoding="utf-8").startswith("DIAGNOSIS")
+
+    # M3.2: privileged-information probe over REF / SELF / SHUF / COH-WRONG
+    probe_report = probe_run(
+        run,
+        ref,
+        seed=7,
+        taskset=taskset,
+        pool_ids=taskset.ids(),
+        llm=DiagnosisLLM(FakeProvider(_reply), arm="probe"),
+        prompt_template=probe_module.load_prompt(),
+    )
+    assert probe_report.pool_size == len(taskset.ids()) and len(probe_report.records) == 12
+    assert {r.arm for r in probe_report.records} == set(PROBE_ARMS)
+    assert all(r.error is None for r in probe_report.records)
+    first_pool_task = sorted(taskset.ids())[0]
+    for r in probe_report.records:
+        assert r.task_top3 == (first_pool_task,)
+        assert r.hit_top1 == (r.assigned_task == first_pool_task)
+        assert r.category_hit is None or isinstance(r.category_hit, bool)
+    shuffled = [r for r in probe_report.records if r.arm == "shuffled"]
+    assert any(r.origin_task != r.assigned_task for r in shuffled)
+    assert (run / "diagnosis" / "probe-s7.json").is_file()
 
     cost = per_failure_cost(run)
     assert (

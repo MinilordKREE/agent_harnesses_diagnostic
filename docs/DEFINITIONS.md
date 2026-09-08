@@ -79,12 +79,93 @@ Replay validation classifies every failure (owner decision, M3.1):
 | `stochastic` | no sufficient step and the control arm passes (> 1/3) at every tested candidate: re-sampling from the prefix recovers, the failure was a policy-level random event that the harness let through | the **manifestation step**, i.e. the last class candidate (`no_tool_call`, `premature_finish`, `late_finish`, `error`, `budget` or the last differing action), `oracle_step_basis: manifestation`; the component follows the rule table for that candidate (R3 to R6 in practice) |
 | `unrepairable` | at some candidate both arms fail and no candidate is sufficient | none; excluded from oracle arms |
 | `unreplayable` | no arm could be scored (prefix drift, infra) | none; excluded from oracle arms |
+| `unresolved` (M3.2) | no validated-positive step and some candidate still undecided at the end of the adaptive schedule | none; excluded from oracle arms and never counted as "invalid" for corruption placement |
 
 When `economize` skipped every control arm, one control arm is run at the first insufficient
 candidate purely to classify (`classification_control: true`). The distribution of failure
 types per source is an E0 finding in its own right. Excluded failures still get a SYSTEM-arm
 diagnosis. `ahd diag signal` refuses failures without a replay verdict unless
 `--allow-unvalidated` (then `oracle_step_basis: unvalidated`, step = `t_class`).
+
+## Adaptive replay and the unresolved verdict (M3.2)
+
+Fixed k = 3 is replaced by an escalation schedule n ∈ {3, 5, 8, 12} per candidate step, both
+arms (substitute, control), same prefix. After each stage the arms give p_sub, p_ctl (unscored
+rollouts count against both: p_sub = passes / n, p_ctl = (passes + unscored) / n) and
+d = p_sub − p_ctl:
+
+| verdict | rule | confirmation |
+|---|---|---|
+| validated-positive | p_sub ≥ 0.6 and p_ctl ≤ 0.34 and d ≥ 0.4 | n ≥ 5 |
+| validated-negative | p_sub ≤ 0.4 or d ≤ 0.1 | n ≥ 5 |
+| escalate | neither | next n |
+| `unresolved` | still undecided at n = 12 | final |
+
+Economize: the control arm is skipped only when p_sub ≤ 0.4 at n = 3; validated-negative then
+needs n = 5 of the substitute arm alone, and if the substitute recovers (p_sub > 0.4 at n = 5)
+the control arm runs from n = 5 on. The sufficient set is the set of validated-positive steps;
+the **negative set** the validated-negative steps. Unresolved steps are never oracle steps and
+never count as "invalid" when a decoy step is placed (they are neither in the sufficient set nor
+in the negative set). A failure with a positive step is `deterministic`; with no positive step
+and an unresolved one, `unresolved`; the other types are as in M3.1.
+
+Rationale. At k = 3 a single rollout moves a pass fraction by a third, so "2/3 vs 1/3" is one
+sample from a decision boundary; the E0b headroom subset showed such marginal verdicts on about
+a fifth of the Claw candidates. The thresholds separate the arms by at least 0.4 (a difference a
+harness patch is expected to reproduce), require every verdict to rest on at least five rollouts
+per arm, and stop escalating at twelve, where the remaining budget buys little: a candidate that
+is still within the undecided band at n = 12 is reported as such rather than forced into a type.
+Pre-M3.2 results (fixed k) are read back with verdicts derived from the same thresholds at n = k
+and `confirmed: false`; E0d-B re-opens the marginal ones (substitute 2/3, control 1/3 with
+substitute ≥ 2/3, or undecided) through the schedule, keeping their rollouts.
+
+## Decoy exclusion (M3.2)
+
+A `where` or coherent-wrong decoy is drawn from the patchable, where-eligible components
+outside the **full rule-table candidate set** recorded on the true diagnosis (every component
+the attribution rule considered plausible), not merely different from the chosen component.
+The pre-M3.2 rule excluded the chosen component only; the E0 report recomputes both and lists
+the clusters whose near/far feasibility the stricter rule removes.
+
+## Coherent-wrong arm (COH-WRONG, M3.2)
+
+Arm `coherent_wrong`, corruption `coherent`: a decoy component c' (per decoy exclusion) at a
+step s' where c' is active and which is **validated-negative** for the failure; when no
+validated-negative step exists the step falls back to one outside the sufficient set and the
+assignment records `step_basis: not_sufficient`. The mechanism, fix hint and severity are
+generated for c' by the `forced_where` diagnoser variant from the cluster's failed trajectories
+only (never the reference), from the controlled vocabulary, and rendered with the same
+identifier stripping and template as every other arm. **Plausibility parity**: a blind judge
+(`deepseek-v4-pro`, temperature 0, cached) sees the failed trajectories and the rendered REF and
+COH-WRONG diagnoses in a seeded random order and scores each 1 to 5; per source the arm is
+accepted when the paired mean difference (REF − COH-WRONG) is within ±0.3 and a two-sided
+paired sign test is not significant at α = 0.10. On violation the texts are regenerated with a
+new variant seed (the judge's scores are never shown to the generator), at most three times; a
+persistent violation is recorded, not hidden.
+
+## Privileged-information probe (M3.2)
+
+A blind model receives only one rendered diagnosis plus the mining pool's task ids with
+one-line descriptions, the source's tool vocabulary and its answer categories, and guesses the
+task (top-1 / top-3), the required tool calls and the answer category. Run per arm
+(REF, SELF = system, SHUF = shuffled, COH-WRONG); recovery rates per arm and the REF − SELF gap
+per cluster are covariates. Cached, ledgered as arm `probe`.
+
+## Component ambiguity (M3.2)
+
+From the attribution records: the fraction of failures whose component was rule-determined
+(candidate set of size one) versus chosen by the model among several candidates, the
+candidate-set size distribution, and per cluster the flag `component_unique` (every member's
+candidate set had size one).
+
+## Recorded for M4 (owner, M3.2)
+
+- Arms: 11 (COH-WRONG added). The repair-stage budget is identical across all diagnosis arms;
+  the end-to-end evolver budget is matched only for REF vs SEARCH-K vs REFINE; both budgets are
+  reported separately in every cell record.
+- Every accepted patch is evaluated on held-out with 2 independent passes (Claw) so that
+  proposal stochasticity and rollout stochasticity are separable; analysis uses a two-way
+  (cluster × held-out task) bootstrap.
 
 ## Opaque shell actions (M3.1)
 
@@ -128,7 +209,7 @@ For a cluster, an arm and a seed, `ahd.diagnosis.corrupt.assign` draws determini
   Distance is recorded as two covariates, `same_layer` and `same_file`; ETCLOVG index
   differences are not used (owner decision 5).
 - `corrupt_why`: another cluster's cause and mechanism; `corrupt_how`: another cluster's fix
-  hint; `shuffled`: another cluster's whole diagnosis.
+  hint; `shuffled`: another cluster's whole diagnosis; `coherent_wrong`: see above (M3.2).
 - Coincidence exclusion: a corrupted value always differs from the true one; when impossible
   the assignment says so.
 

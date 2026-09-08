@@ -33,6 +33,7 @@ from ahd.diagnosis.pipeline import DiagnosisSet
 from ahd.diagnosis.replay import ReplayResult
 from ahd.errors import InfraError
 from ahd.experiments.e0 import E0Spec, load_spec, pass_runs
+from ahd.harness.components import ComponentManifest
 from ahd.llm.ledger import LedgerRow, read_ledger
 from ahd.runner.records import FailureRecord, RolloutRecord
 from ahd.runner.spec import BENCHMARK_TRIALS_BY_SOURCE
@@ -650,7 +651,10 @@ ARM_ORDER: tuple[str, ...] = (
     "corrupt_why",
     "corrupt_how",
     "shuffled",
+    "coherent_wrong",
 )
+D2_ARMS: tuple[str, ...] = ARM_ORDER[:5]
+"""D2 (frozen E0b text): near + far + why + how + all; COH-WRONG feasibility is reported."""
 
 
 def feasibility_by_key(
@@ -748,7 +752,7 @@ def e0b_tables(
             )
             for task_id, ok in sorted(_task_pass_hat(d).items()):
                 task_rows.append([source, d.name, task_id, int(ok)])
-        for d in [*dirs, *b1_refs[source]]:
+        for d in [*dirs, *b1_refs[source], *b2[source]]:
             agg = aggregate_run(d)
             infra_rows.append(
                 [
@@ -898,7 +902,7 @@ def e0b_tables(
                 # feasible in at least one pass: E2 re-derives corruption on the pooled clusters,
                 # which only adds donors, so any pass that could corrupt this key suffices
                 per_run_feasible = any(
-                    all(fe.get(arm, "").startswith("feasible") for arm in ARM_ORDER)
+                    all(fe.get(arm, "").startswith("feasible") for arm in D2_ARMS)
                     for fe in feasible.get((c.cause_label, c.component), {}).values()
                 )
                 if len(c.members) >= 2 and validated and per_run_feasible:
@@ -992,7 +996,18 @@ def e0b_tables(
     written.append(
         write_csv(
             data_dir / "corruption_feasibility.csv",
-            ["source", "run_id", "cause_label", "component", "near", "far", "why", "how", "all"],
+            [
+                "source",
+                "run_id",
+                "cause_label",
+                "component",
+                "near",
+                "far",
+                "why",
+                "how",
+                "all",
+                "coherent",
+            ],
             feas_rows,
         )
     )
@@ -1385,6 +1400,41 @@ def decisions(
                     ),
                 ]
             )
+    if "D8" in spec.decision_rules:
+        meaningful = th.get("delta_meaningful_points", 3.0)
+        choices = extras.get("mde_decision") or {}
+        if not choices:
+            rows.append(["D8", "no seed noise band (E0d-A not run)", "not evaluable"])
+        for source, choice in sorted(choices.items()):
+            rows.append(
+                [
+                    f"D8:{source}",
+                    f"{choice['choice']} MDE={_num(choice['mde'], 2)} points "
+                    f"cost={_num(choice['cost_usd'], 2)} USD (delta_meaningful={meaningful})",
+                    "cheapest configuration with MDE <= delta_meaningful within owner_budget_usd"
+                    if choice["meets_d8"]
+                    else (
+                        "no configuration within owner_budget_usd reaches delta_meaningful: best "
+                        "available within the budget; the paper states the exclusion bound "
+                        f"{_num(choice['mde'], 2)} points"
+                        if choice.get("within_budget")
+                        else "no configuration fits owner_budget_usd: cheapest listed; the paper "
+                        f"states the exclusion bound {_num(choice['mde'], 2)} points"
+                    ),
+                ]
+            )
+        for source, ok in sorted((extras.get("parity_ok") or {}).items()):
+            rows.append(
+                [
+                    f"COH-WRONG:{source}",
+                    "parity " + ("ok" if ok else "not reached" if ok is not None else "not judged"),
+                    "arm admitted"
+                    if ok
+                    else "persistent parity violation recorded; arm reported with the caveat"
+                    if ok is not None
+                    else "not evaluable",
+                ]
+            )
     return rows
 
 
@@ -1424,6 +1474,15 @@ def build_report(*, spec_path: Path, data_dir: Path, report_path: Path) -> list[
     b_written, b_md, calib, extras = e0b_tables(spec, runs_root, data_dir)
     written.extend(b_written)
     md.append("## E0b calibration\n\n" + "\n\n".join(b_md))
+    if spec.E0d:
+        from ahd.experiments.report_e0d import e0d_tables
+
+        manifest_path = Path("configs/harness/seed_components.yaml")
+        components = ComponentManifest.load(manifest_path)
+        d_written, d_md, d_extras = e0d_tables(spec, runs_root, data_dir, manifest=components)
+        written.extend(d_written)
+        extras.update(d_extras)
+        md.append("## E0d calibration addendum (M3.2)\n\n" + "\n\n".join(d_md))
     cost_path = data_dir / "cost.csv"
     cost_per_rollout: float | None = None
     if cost_path.is_file():

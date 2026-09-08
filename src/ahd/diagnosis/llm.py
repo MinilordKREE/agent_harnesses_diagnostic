@@ -66,11 +66,18 @@ def parse_json_object(text: str) -> dict[str, Any]:
 
 class DiagnosisLLM:
     def __init__(
-        self, provider: Provider, *, config: DiagnosisModelConfig | None = None, seed: int = 0
+        self,
+        provider: Provider,
+        *,
+        config: DiagnosisModelConfig | None = None,
+        seed: int = 0,
+        arm: str = DIAGNOSIS_ARM,
     ) -> None:
         self._provider = provider
         self.config = config or DiagnosisModelConfig()
         self._seed = seed
+        self.arm = arm
+        """Ledger arm: ``diagnosis`` normally; ``probe`` for the privileged-information probe."""
         self.requests: list[ChatRequest] = []
 
     def ask_json(
@@ -89,7 +96,7 @@ class DiagnosisLLM:
             thinking=self.config.thinking,
             timeout_s=self.config.timeout_s,
             use_cache=self.config.use_cache,
-            attribution=Attribution(arm=DIAGNOSIS_ARM, unit_id=unit_id),
+            attribution=Attribution(arm=self.arm, unit_id=unit_id),
             cache_scope=cache_scope,
         )
         self.requests.append(request)

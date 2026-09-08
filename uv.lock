@@ -23,6 +23,7 @@ source = { editable = "." }
 dependencies = [
     { name = "datasets" },
     { name = "evo-bench" },
+    { name = "numpy" },
     { name = "openai" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -42,6 +43,7 @@ dev = [
 requires-dist = [
     { name = "datasets", specifier = ">=5.0.1" },
     { name = "evo-bench", editable = "third_party/evo-bench" },
+    { name = "numpy", specifier = ">=2.5.2" },
     { name = "openai", specifier = ">=1.50" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydantic-settings", specifier = ">=2.3" },

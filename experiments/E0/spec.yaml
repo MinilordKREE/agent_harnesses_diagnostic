@@ -55,6 +55,41 @@ E0b:
   B6_clusters: {vocabulary: configs/prompts/diagnosis/causes.yaml, corruption_seed: 0, leakage: true}
   B7_judge_calibration: {n_artifacts: 50, pooled_from: [claw_eval, gdpval], self_consistency: cache_bypass_per_judge, text_vs_vision: gdpval, released_labels: report_if_any}
   B8_render: {clusters_per_source: 3, arms: [reference, system, corrupt_where_near, corrupt_where_far, corrupt_why, corrupt_how, shuffled]}
+E0c:                      # the D1' pivot (i): policy reasoning_effort low
+  status: not_run         # recorded 2026-09-08 before E0d (owner precondition): E0d applies to the
+  note: max condition only; E0c follows E0d
+E0d:                      # calibration addendum (M3.2): oracle validity, corruption validity, power.
+  role: calibration_addendum   # no E2 cell may run; M4 Phase B waits; STOP after the E0d report
+  hard_cap_usd: 40.0      # E0d ledgers only (new held-out passes, ledger.e0d.jsonl of the diagnosed runs, e0d.ledger.jsonl)
+  order: [B, C, D, A]     # oracle validity first (it feeds every later table), then corruption validity, then the seed noise band; every stage checks the cap before spending; E, F, G are report-side
+  A_seed_noise:
+    condition: max        # E0c not run: the max condition only
+    passes_total: {claw_eval: 8, gdpval: 5}   # 2 exist from E0b (B2); new passes continue the numbering e0b-b2-<source>-p<n>
+    outputs: [sigma_seed, abs_delta_all_pairs, p90, p95]
+  B_replay_escalation:
+    reopen: "fixed-k verdicts with substitute 2/3, or control 1/3 with substitute >= 2/3, or undecided under the M3.2 thresholds at n = 3"
+    schedule: [3, 5, 8, 12]
+    scope: "replays.json (the primary verdicts); the full-arms headroom subset stays an n = 3 record"
+    rechain: [signal, cluster, corrupt, leakage]   # cached model calls; diagnoses whose oracle step changed are regenerated
+  C_coherent_wrong:
+    min_members: 2
+    parity: {mean_tolerance: 0.3, sign_test_alpha: 0.10, scope: source}
+    max_regenerations: 3
+    judge: {model: deepseek-v4-pro, temperature: 0.0, cached: true}
+  D_pi_probe: {arms: [reference, system, shuffled, coherent_wrong], model: deepseek-v4-pro, ledger_arm: probe, pool: mining_pool}
+  E_component_ambiguity: report-side
+  F_mde:
+    N: [7, 8, 10, 14]
+    k: [3, 5]
+    heldout_passes: [1, 2]
+    alpha: 0.05
+    power: 0.8
+    sims: 1000
+    seed: 0
+    spread: "max(sigma_seed, 0.05)"   # 0.05 = 5 pass-rate points
+    cost_model: "arms(11) x N x k x (proposal_call_usd + passes x heldout_pass_usd), proposal_call_usd = mean diagnosis-arm call in E0b, heldout_pass_usd = mean B2 pass of the source"
+  G_funnel: report-side
+  corruption_seed: 0
 decision_rules:
   D1: >
     Source enters E2 iff: seed pass rate on the mining pool (validation U eval_dev) in
@@ -88,6 +123,11 @@ decision_rules:
     evidence); otherwise the text judge stays primary and the vision verdict is reported as
     secondary. Whichever is chosen is frozen in the E2 spec and applies to every gdpval arm;
     Claw keeps V4 Pro. Judge model per source is recorded in every manifest.
+  D8: >
+    delta_meaningful = 3 points. E2 uses the cheapest (N, k, passes) configuration with
+    MDE <= 3 if one exists within owner_budget_usd; otherwise the best available configuration,
+    and the paper states the exclusion bound (the smallest effect the design would have
+    detected) rather than a null.
 thresholds:            # the numbers inside the rules, as data
   pass_rate_min: 0.10
   pass_rate_max: 0.90
@@ -100,4 +140,6 @@ thresholds:            # the numbers inside the rules, as data
   judge_self_consistency_min: 0.90
   judge_cross_agreement_min: 0.80
   vision_disagreement_min: 0.10
-  e2_arms: 8
+  e2_arms: 8            # D4 (E0b) was projected with the 8 arms of the frozen spec
+  e2_arms_m32: 11       # D8 cost model (COH-WRONG added, M3.2)
+  delta_meaningful_points: 3.0
