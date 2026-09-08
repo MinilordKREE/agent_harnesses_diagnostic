@@ -27,7 +27,9 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+import threading
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Literal
 
@@ -447,16 +449,19 @@ def escalate_replays(
     if log_path.is_file():
         rows = _load_list(log_path, EscalationRow, what="replay_escalation.json")
     done = {r.failure_key for r in rows}
-    for record in load_alignments(run_dir):
-        key = safe_key(record.task_id, record.replicate, record.attempt)
-        existing = results.get(key)
-        if existing is None or key in done:
-            continue
+    alignments = load_alignments(run_dir)
+
+    def ordered_results() -> list[ReplayResult]:
+        return [
+            results[safe_key(a.task_id, a.replicate, a.attempt)]
+            for a in alignments
+            if safe_key(a.task_id, a.replicate, a.attempt) in results
+        ]
+
+    lock = threading.Lock()
+
+    def escalate_one(record: AlignmentRecord, existing: ReplayResult) -> None:
         marginal = [c for c in existing.candidates if is_marginal(c)]
-        if not marginal:
-            continue
-        if before_each is not None:
-            before_each()
         task = taskset.by_id(record.task_id)
         failed, failed_dir = _failed_trajectory(run_dir, record)
         reference_dir = rollout_dir(
@@ -471,56 +476,66 @@ def escalate_replays(
             recorded_workspace=_recorded_workspace(failed_dir),
             reference_workspace=_recorded_workspace(reference_dir),
         )
-        results[key] = updated
         after = {c.step: c for c in updated.candidates}
-        rows.append(
-            EscalationRow(
-                failure_key=key,
-                failure_type_before=existing.failure_type,
-                failure_type_after=updated.failure_type,
-                oracle_step_before=existing.oracle_step,
-                oracle_step_after=updated.oracle_step,
-                usd=updated.usd - existing.usd,
-                candidates=tuple(
-                    EscalatedCandidate(
-                        step=c.step,
-                        before=verdict_of(c),
-                        after=verdict_of(after[c.step]),
-                        n=after[c.step].n,
-                        substitute=(
-                            f"{c.substitute.passed}/{c.substitute.k} -> "
-                            f"{after[c.step].substitute.passed}/{after[c.step].substitute.k}"
-                        ),
-                        control=(
-                            (
-                                "skipped"
-                                if c.control.skipped
-                                else f"{c.control.passed}/{c.control.k}"
-                            )
-                            + " -> "
-                            + (
-                                "skipped"
-                                if after[c.step].control.skipped
-                                else f"{after[c.step].control.passed}/{after[c.step].control.k}"
-                            )
-                        ),
-                    )
-                    for c in marginal
-                ),
-            )
+        row = EscalationRow(
+            failure_key=updated.failure_key,
+            failure_type_before=existing.failure_type,
+            failure_type_after=updated.failure_type,
+            oracle_step_before=existing.oracle_step,
+            oracle_step_after=updated.oracle_step,
+            usd=updated.usd - existing.usd,
+            candidates=tuple(
+                EscalatedCandidate(
+                    step=c.step,
+                    before=verdict_of(c),
+                    after=verdict_of(after[c.step]),
+                    n=after[c.step].n,
+                    substitute=(
+                        f"{c.substitute.passed}/{c.substitute.k} -> "
+                        f"{after[c.step].substitute.passed}/{after[c.step].substitute.k}"
+                    ),
+                    control=(
+                        ("skipped" if c.control.skipped else f"{c.control.passed}/{c.control.k}")
+                        + " -> "
+                        + (
+                            "skipped"
+                            if after[c.step].control.skipped
+                            else f"{after[c.step].control.passed}/{after[c.step].control.k}"
+                        )
+                    ),
+                )
+                for c in marginal
+            ),
         )
-        ordered = [
-            results[safe_key(a.task_id, a.replicate, a.attempt)]
-            for a in load_alignments(run_dir)
-            if safe_key(a.task_id, a.replicate, a.attempt) in results
-        ]
-        atomic_write_text(out / "replays.json", _dump(ordered))
-        atomic_write_text(log_path, _dump(rows))
-    ordered = [
-        results[safe_key(a.task_id, a.replicate, a.attempt)]
-        for a in load_alignments(run_dir)
-        if safe_key(a.task_id, a.replicate, a.attempt) in results
-    ]
+        with lock:
+            results[updated.failure_key] = updated
+            rows.append(row)
+            atomic_write_text(out / "replays.json", _dump(ordered_results()))
+            atomic_write_text(log_path, _dump(rows))
+
+    pending: list[tuple[AlignmentRecord, ReplayResult]] = []
+    for record in alignments:
+        key = safe_key(record.task_id, record.replicate, record.attempt)
+        existing = results.get(key)
+        if existing is None or key in done or not any(is_marginal(c) for c in existing.candidates):
+            continue
+        pending.append((record, existing))
+    if workers <= 1 or len(pending) <= 1:
+        for record, existing in pending:
+            if before_each is not None:
+                before_each()
+            escalate_one(record, existing)
+    else:
+        # failures escalate concurrently; the replayer's semaphore still bounds the rollouts
+        with ThreadPoolExecutor(max_workers=min(workers, len(pending))) as pool:
+            futures = []
+            for record, existing in pending:
+                if before_each is not None:
+                    before_each()
+                futures.append(pool.submit(escalate_one, record, existing))
+            for future in futures:
+                future.result()
+    ordered = ordered_results()
     _write_failure_types(
         run_dir, ordered, k=replayer.k, max_candidates=max_candidates, economize=economize
     )

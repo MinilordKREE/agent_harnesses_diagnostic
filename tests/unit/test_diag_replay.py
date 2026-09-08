@@ -550,7 +550,7 @@ def test_escalate_reopens_marginal_candidates_and_keeps_their_rollouts(
     )
     assert is_marginal(legacy)
     setup.worker.outcomes.update({("control", 4): "fail", ("control", 5): "fail"})
-    result = setup.replayer().escalate(
+    result = setup.replayer(workers=2).escalate(
         taskset.by_id(TASK),
         existing,
         failed_trajectory=failed,

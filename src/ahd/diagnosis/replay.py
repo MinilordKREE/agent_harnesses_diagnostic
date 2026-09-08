@@ -942,30 +942,38 @@ class Replayer:
         verdicts. Rewrites ``replay.json`` in place."""
         key = existing.failure_key
         drift_reports: dict[str, JsonValue] = dict(existing.drift_reports)
+
+        def reopen(c: CandidateReplay) -> CandidateReplay:
+            candidate = next(x for x in alignment.candidates if x.step == c.step)
+            return self._candidate(
+                task,
+                key=key,
+                replicate=existing.replicate,
+                candidate=candidate,
+                failed_trajectory=failed_trajectory,
+                reference_trajectory=reference_trajectory,
+                recorded_workspace=recorded_workspace,
+                reference_workspace=reference_workspace,
+                drift_reports=drift_reports,
+                existing=c,
+            )
+
+        marginal = [c for c in existing.candidates if is_marginal(c)]
+        reopened: dict[int, CandidateReplay] = {}
+        if self.workers == 1 or len(marginal) <= 1:
+            reopened = {c.step: reopen(c) for c in marginal}
+        elif marginal:
+            with ThreadPoolExecutor(max_workers=min(self.workers, len(marginal))) as pool:
+                futures = {c.step: pool.submit(reopen, c) for c in marginal}
+                reopened = {step: f.result() for step, f in futures.items()}
         results: list[CandidateReplay] = []
         for c in existing.candidates:
-            if not is_marginal(c):
-                results.append(
-                    c
-                    if c.verdict is not None
-                    else c.model_copy(update={"verdict": verdict_of(c), "n": c.substitute.k})
-                )
-                continue
-            candidate = next(x for x in alignment.candidates if x.step == c.step)
-            results.append(
-                self._candidate(
-                    task,
-                    key=key,
-                    replicate=existing.replicate,
-                    candidate=candidate,
-                    failed_trajectory=failed_trajectory,
-                    reference_trajectory=reference_trajectory,
-                    recorded_workspace=recorded_workspace,
-                    reference_workspace=reference_workspace,
-                    drift_reports=drift_reports,
-                    existing=c,
-                )
-            )
+            if c.step in reopened:
+                results.append(reopened[c.step])
+            elif c.verdict is not None:
+                results.append(c)
+            else:
+                results.append(c.model_copy(update={"verdict": verdict_of(c), "n": c.substitute.k}))
         return self._finish(
             task,
             key=key,
