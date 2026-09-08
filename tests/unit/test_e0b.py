@@ -245,3 +245,84 @@ def test_decisions_d1prime_and_d7() -> None:
     }
     assert by_rule2["D1prime"].startswith("pivot required")
     assert by_rule2["D7"].startswith("gdpval E2 primary judge = text")
+
+
+def test_report_selects_seed_passes_and_keys_feasibility_by_cluster(tmp_path: Path) -> None:
+    """A ``-ref`` run is a reference retry, not a pass: it must never enter the A/A pair or the
+    D1 pass rate. Feasibility is matched by (cause, component), since a cluster merged across
+    passes has a member-hash id that no per-run cluster shares."""
+    from ahd.diagnosis.cluster import cluster
+    from ahd.diagnosis.corrupt import Assignment, AssignmentTable
+    from ahd.experiments.report import feasibility_by_key, reference_runs, seed_runs
+    from tests.diag_fixtures import diagnosis
+
+    runs = tmp_path
+    for name in (
+        "e0b-b1-x-p1",
+        "e0b-b1-x-p1-ref",
+        "e0b-b1-x-p2",
+        "e0b-b1-x-p10",
+        "e0b-b1-xy-p1",
+        "e0b-b2-x-p1",
+    ):
+        (runs / name).mkdir()
+        (runs / name / "manifest.json").write_text("{}", encoding="utf-8")
+    (runs / "e0b-b1-x-p3").mkdir()  # no manifest: never finished
+    assert [d.name for d in seed_runs(runs, "b1", "x")] == [
+        "e0b-b1-x-p1",
+        "e0b-b1-x-p2",
+        "e0b-b1-x-p10",
+    ]
+    assert [d.name for d in reference_runs(runs, "b1", "x")] == ["e0b-b1-x-p1-ref"]
+    assert [d.name for d in seed_runs(runs, "b2", "x")] == ["e0b-b2-x-p1"]
+
+    diags = [
+        diagnosis(
+            task_id="a",
+            replicate="r1",
+            component="system_prompt",
+            cause="premature_termination",
+            severity="medium",
+            step=4,
+        ),
+        diagnosis(
+            task_id="b",
+            replicate="r1",
+            component="system_prompt",
+            cause="premature_termination",
+            severity="high",
+            step=6,
+        ),
+    ]
+    per_run_ids: list[str] = []
+    for run, ds in (("e0b-b1-x-p1", diags[:1]), ("e0b-b1-x-p2", diags[1:])):
+        cs = cluster(ds)
+        per_run_ids.append(cs.clusters[0].id)
+        out = runs / run / "diagnosis"
+        (out / "assignments").mkdir(parents=True)
+        (out / "clusters.json").write_text(json.dumps(cs.model_dump(mode="json")), encoding="utf-8")
+        impossible = "no other cluster with a different value" if run.endswith("p2") else None
+        table = AssignmentTable(
+            arm="corrupt_why",
+            seed=0,
+            assignments=(
+                Assignment(
+                    cluster_id=cs.clusters[0].id,
+                    arm="corrupt_why",
+                    seed=0,
+                    corruption="why",
+                    impossible=impossible,
+                ),
+            ),
+        )
+        (out / "assignments" / "corrupt_why-s0.json").write_text(
+            json.dumps(table.model_dump(mode="json")), encoding="utf-8"
+        )
+    merged = cluster(diags)
+    assert len(merged.clusters) == 1 and merged.clusters[0].id not in per_run_ids
+    assert feasibility_by_key(seed_runs(runs, "b1", "x")) == {
+        ("premature_termination", "system_prompt"): {
+            "e0b-b1-x-p1": {"corrupt_why": "feasible"},
+            "e0b-b1-x-p2": {"corrupt_why": "impossible: no other cluster with a different value"},
+        }
+    }

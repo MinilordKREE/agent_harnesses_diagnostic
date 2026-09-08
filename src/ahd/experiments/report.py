@@ -32,7 +32,7 @@ from ahd.diagnosis.leakage import LeakageReport
 from ahd.diagnosis.pipeline import DiagnosisSet
 from ahd.diagnosis.replay import ReplayResult
 from ahd.errors import InfraError
-from ahd.experiments.e0 import E0Spec, load_spec
+from ahd.experiments.e0 import E0Spec, load_spec, pass_runs
 from ahd.llm.ledger import LedgerRow, read_ledger
 from ahd.runner.records import FailureRecord, RolloutRecord
 from ahd.runner.spec import BENCHMARK_TRIALS_BY_SOURCE
@@ -635,6 +635,52 @@ def _bootstrap_delta(
     return deltas[int(0.025 * n)], deltas[min(n - 1, int(0.975 * n))]
 
 
+def seed_runs(runs_root: Path, block: str, source: str) -> list[Path]:
+    """Finished seed passes of a block, in pass order (never the ``-ref`` reference runs)."""
+    return pass_runs(runs_root, block, source)
+
+
+def reference_runs(runs_root: Path, block: str, source: str) -> list[Path]:
+    return pass_runs(runs_root, block, source, reference=True)
+
+
+ARM_ORDER: tuple[str, ...] = (
+    "corrupt_where_near",
+    "corrupt_where_far",
+    "corrupt_why",
+    "corrupt_how",
+    "shuffled",
+)
+
+
+def feasibility_by_key(
+    runs: Sequence[Path],
+) -> dict[tuple[str, str], dict[str, dict[str, str]]]:
+    """(cause_label, component) -> run name -> arm -> "feasible" | "impossible: <why>".
+
+    Keyed by the cluster key rather than the cluster id: ids hash the member list, so a cluster
+    merged across passes never shares an id with the per-run clusters it came from."""
+    out: dict[tuple[str, str], dict[str, dict[str, str]]] = {}
+    for run in runs:
+        cs = clusters(run)
+        if cs is None:
+            continue
+        key_of = {c.id: (c.cause_label, c.component) for c in cs.clusters}
+        for arm, table in assignments(run).items():
+            if arm in ("reference", "system"):
+                continue
+            for item in table.assignments:
+                key = key_of.get(item.cluster_id)
+                if key is None:
+                    raise InfraError(
+                        f"{run.name}: assignment for unknown cluster {item.cluster_id!r}"
+                    )
+                out.setdefault(key, {}).setdefault(run.name, {})[arm] = (
+                    "feasible" if item.impossible is None else f"impossible: {item.impossible}"
+                )
+    return out
+
+
 def _task_pass_hat(run_dir: Path) -> dict[str, bool]:
     summary_path = run_dir / "summary.json"
     if not summary_path.is_file():
@@ -665,8 +711,9 @@ def e0b_tables(
     md: list[str] = []
     calib: dict[str, SourceCalibration] = {}
     extras: dict[str, Any] = {}
-    b1 = {s: sorted(runs_root.glob(f"e0b-b1-{s}-p*")) for s in spec.sources}
-    b2 = {s: sorted(runs_root.glob(f"e0b-b2-{s}-p*")) for s in spec.sources}
+    b1 = {s: seed_runs(runs_root, "b1", s) for s in spec.sources}
+    b1_refs = {s: reference_runs(runs_root, "b1", s) for s in spec.sources}
+    b2 = {s: seed_runs(runs_root, "b2", s) for s in spec.sources}
     if not any(b1.values()):
         return written, ["E0b has not run."], calib, extras
     baseline_rows: list[list[object]] = []
@@ -681,7 +728,7 @@ def e0b_tables(
     cost_rows: list[list[object]] = []
     infra_rows: list[list[object]] = []
     for source in spec.sources:
-        dirs = [d for d in b1[source] if (d / "manifest.json").is_file()]
+        dirs = b1[source]
         if not dirs:
             continue
         aggs = [aggregate_run(d) for d in dirs]
@@ -701,6 +748,8 @@ def e0b_tables(
             )
             for task_id, ok in sorted(_task_pass_hat(d).items()):
                 task_rows.append([source, d.name, task_id, int(ok)])
+        for d in [*dirs, *b1_refs[source]]:
+            agg = aggregate_run(d)
             infra_rows.append(
                 [
                     source,
@@ -837,43 +886,20 @@ def e0b_tables(
                     with_two,
                 ]
             )
-            feasible_by_cluster: dict[str, dict[str, str]] = {}
-            for run in dirs:
-                for arm, table in assignments(run).items():
-                    if arm in ("reference", "system"):
-                        continue
-                    for item in table.assignments:
-                        feasible_by_cluster.setdefault(item.cluster_id, {})[arm] = (
-                            "feasible"
-                            if item.impossible is None
-                            else f"impossible: {item.impossible}"
-                        )
-            for cid in sorted(feasible_by_cluster):
-                fe = feasible_by_cluster[cid]
-                arms_order = (
-                    "corrupt_where_near",
-                    "corrupt_where_far",
-                    "corrupt_why",
-                    "corrupt_how",
-                    "shuffled",
-                )
-                feas_row: list[object] = [source, cid, *[fe.get(arm, "") for arm in arms_order]]
-                feas_rows.append(feas_row)
+            feasible = feasibility_by_key(dirs)
+            for key in sorted(feasible):
+                for run_name in sorted(feasible[key]):
+                    fe = feasible[key][run_name]
+                    feas_rows.append(
+                        [source, run_name, key[0], key[1], *[fe.get(arm, "") for arm in ARM_ORDER]]
+                    )
             for c in merged.clusters:
                 validated = c.oracle_validated_members > 0
+                # feasible in at least one pass: E2 re-derives corruption on the pooled clusters,
+                # which only adds donors, so any pass that could corrupt this key suffices
                 per_run_feasible = any(
-                    all(
-                        fe.get(arm, "").startswith("feasible")
-                        for arm in (
-                            "corrupt_where_near",
-                            "corrupt_where_far",
-                            "corrupt_why",
-                            "corrupt_how",
-                            "shuffled",
-                        )
-                    )
-                    for cid, fe in feasible_by_cluster.items()
-                    if cid == c.id
+                    all(fe.get(arm, "").startswith("feasible") for arm in ARM_ORDER)
+                    for fe in feasible.get((c.cause_label, c.component), {}).values()
                 )
                 if len(c.members) >= 2 and validated and per_run_feasible:
                     primary += 1
@@ -966,7 +992,7 @@ def e0b_tables(
     written.append(
         write_csv(
             data_dir / "corruption_feasibility.csv",
-            ["source", "cluster_id", "near", "far", "why", "how", "all"],
+            ["source", "run_id", "cause_label", "component", "near", "far", "why", "how", "all"],
             feas_rows,
         )
     )
@@ -1405,7 +1431,9 @@ def build_report(*, spec_path: Path, data_dir: Path, report_path: Path) -> list[
             values = [
                 float(r["policy_usd_per_rollout"]) + float(r["judge_usd_per_rollout"])
                 for r in csv.DictReader(fh)
-                if r["policy_usd_per_rollout"] and r["judge_usd_per_rollout"]
+                if r["policy_usd_per_rollout"]
+                and r["judge_usd_per_rollout"]
+                and not r["run_id"].endswith("-ref")  # D4 projects E2 arms, i.e. seed-like passes
             ]
         cost_per_rollout = statistics.fmean(values) if values else None
     incidents_path = runs_root / "incidents.jsonl"

@@ -14,6 +14,7 @@ import base64
 import json
 import logging
 import random
+import re
 import shutil
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -1093,6 +1094,27 @@ def b7_judge_calibration(ctx: E0Context, run_dirs: Sequence[Path]) -> Path:
     return out
 
 
+def pass_runs(
+    runs_root: Path,
+    block: str,
+    source: str,
+    *,
+    reference: bool = False,
+    marker: str = "manifest.json",
+) -> list[Path]:
+    """Runs ``e0b-<block>-<source>-p<n>`` (``...-p<n>-ref`` when ``reference``) that have
+    ``marker``, in pass order. A plain ``p*`` glob also matches the ``-ref`` runs, which are
+    reference-mode retries of the failed tasks, not passes: B7 once pooled artifacts from one."""
+    suffix = "-ref" if reference else ""
+    pattern = re.compile(rf"e0b-{re.escape(block)}-{re.escape(source)}-p(\d+){suffix}")
+    found: list[tuple[int, Path]] = []
+    for d in runs_root.glob(f"e0b-{block}-{source}-p*{suffix}"):
+        m = pattern.fullmatch(d.name)
+        if m is not None and (d / marker).is_file():
+            found.append((int(m.group(1)), d))
+    return [d for _, d in sorted(found)]
+
+
 def e0b(ctx: E0Context, *, stages: Sequence[str] = ("B1", "B2", "B3-6", "B7")) -> None:
     require_preflight(ctx)
     splits = load_splits()
@@ -1102,9 +1124,8 @@ def e0b(ctx: E0Context, *, stages: Sequence[str] = ("B1", "B2", "B3-6", "B7")) -
     if "B2" in stages:
         b2_heldout(ctx, splits)
     if not b1_dirs:
-        b1_dirs = {s: sorted(ctx.runs_root.glob(f"e0b-b1-{s}-p*")) for s in ctx.spec.sources}
         b1_dirs = {
-            s: [d for d in dirs if (d / "summary.json").is_file()] for s, dirs in b1_dirs.items()
+            s: pass_runs(ctx.runs_root, "b1", s, marker="summary.json") for s in ctx.spec.sources
         }
     if "B3-6" in stages:
         b3_to_b6(ctx, b1_dirs)
@@ -1125,6 +1146,7 @@ __all__ = [
     "e0b",
     "full_arms_subset",
     "load_spec",
+    "pass_runs",
     "pilot",
     "pilot_tasks",
     "preflight",
