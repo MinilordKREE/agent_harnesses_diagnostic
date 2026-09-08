@@ -1,0 +1,13 @@
+source,run_id,infra_failures,infra_by_kind,usage_mismatch,partial,budget_failures
+browsecomp,e0b-b1-browsecomp-p1,0,{},0,0,1
+browsecomp,e0b-b1-browsecomp-p2,1,"{""model_call_error"": 1}",0,0,2
+hle,e0b-b1-hle-p1,0,{},0,0,0
+hle,e0b-b1-hle-p2,0,{},0,0,0
+gdpval,e0b-b1-gdpval-p1,1,"{""TypeError"": 1}",0,1,2
+gdpval,e0b-b1-gdpval-p2,0,{},0,0,0
+gdpval,e0b-b1-gdpval-p1-ref,1,"{""TypeError"": 1}",0,1,2
+gdpval,e0b-b1-gdpval-p2-ref,0,{},0,0,0
+claw_eval,e0b-b1-claw_eval-p1,0,{},0,0,0
+claw_eval,e0b-b1-claw_eval-p2,0,{},0,0,0
+claw_eval,e0b-b1-claw_eval-p1-ref,0,{},0,0,0
+claw_eval,e0b-b1-claw_eval-p2-ref,0,{},0,0,0

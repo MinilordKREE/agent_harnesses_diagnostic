@@ -1,0 +1,13 @@
+source,split,tasks
+browsecomp,validation,32
+browsecomp,eval_dev,24
+browsecomp,heldout,30
+claw_eval,validation,32
+claw_eval,eval_dev,24
+claw_eval,heldout,30
+gdpval,validation,32
+gdpval,eval_dev,24
+gdpval,heldout,30
+hle,validation,32
+hle,eval_dev,24
+hle,heldout,30

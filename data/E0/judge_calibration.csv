@@ -1,0 +1,3 @@
+judge,artifacts,rejudged,self_consistency,released_labels
+text (deepseek-v4-pro),69,69,0.9855,"none: the Evo-Bench snapshot releases expected answers and rubrics, no per-trajectory judge labels"
+vision (gdpval secondary),44,41,1.0000,"none: the Evo-Bench snapshot releases expected answers and rubrics, no per-trajectory judge labels"

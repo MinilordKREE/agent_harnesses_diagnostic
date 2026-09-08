@@ -1,0 +1,26 @@
+source,run_id,cause_label,component,near,far,why,how,all
+gdpval,e0b-b1-gdpval-p1,error_recovery,error_handling,feasible,feasible,feasible,feasible,feasible
+gdpval,e0b-b1-gdpval-p1,insufficient_evidence,system_prompt,feasible,feasible,feasible,feasible,feasible
+gdpval,e0b-b1-gdpval-p2,over_exploration,planner,feasible,feasible,impossible: no other cluster with a different value,impossible: no other cluster with a different value,impossible: no other cluster with a different value
+gdpval,e0b-b1-gdpval-p1,over_exploration,system_prompt,feasible,feasible,feasible,feasible,feasible
+gdpval,e0b-b1-gdpval-p1,premature_termination,completion_policy,feasible,feasible,feasible,feasible,feasible
+claw_eval,e0b-b1-claw_eval-p1,argument_error,tool_router,feasible,feasible,feasible,feasible,feasible
+claw_eval,e0b-b1-claw_eval-p2,argument_error,tool_router,feasible,feasible,feasible,feasible,feasible
+claw_eval,e0b-b1-claw_eval-p2,instruction_misread,system_prompt,feasible,feasible,feasible,feasible,feasible
+claw_eval,e0b-b1-claw_eval-p2,insufficient_evidence,completion_policy,feasible,feasible,feasible,feasible,feasible
+claw_eval,e0b-b1-claw_eval-p2,insufficient_evidence,planner,feasible,feasible,feasible,feasible,feasible
+claw_eval,e0b-b1-claw_eval-p1,insufficient_evidence,system_prompt,feasible,feasible,feasible,feasible,feasible
+claw_eval,e0b-b1-claw_eval-p1,insufficient_evidence,tool_router,feasible,feasible,feasible,feasible,feasible
+claw_eval,e0b-b1-claw_eval-p2,insufficient_evidence,tool_router,feasible,feasible,feasible,feasible,feasible
+claw_eval,e0b-b1-claw_eval-p1,over_exploration,observation_shaping,feasible,feasible,feasible,feasible,feasible
+claw_eval,e0b-b1-claw_eval-p1,over_exploration,planner,feasible,feasible,feasible,feasible,feasible
+claw_eval,e0b-b1-claw_eval-p2,over_exploration,planner,feasible,feasible,feasible,feasible,feasible
+claw_eval,e0b-b1-claw_eval-p1,over_exploration,system_prompt,feasible,feasible,feasible,feasible,feasible
+claw_eval,e0b-b1-claw_eval-p1,over_exploration,tool_router,feasible,feasible,feasible,feasible,feasible
+claw_eval,e0b-b1-claw_eval-p2,over_exploration,tool_router,feasible,feasible,feasible,feasible,feasible
+claw_eval,e0b-b1-claw_eval-p1,premature_termination,completion_policy,feasible,feasible,feasible,feasible,feasible
+claw_eval,e0b-b1-claw_eval-p2,premature_termination,completion_policy,feasible,feasible,feasible,feasible,feasible
+claw_eval,e0b-b1-claw_eval-p2,premature_termination,system_prompt,feasible,feasible,feasible,feasible,feasible
+claw_eval,e0b-b1-claw_eval-p1,wrong_target,planner,feasible,feasible,feasible,feasible,feasible
+claw_eval,e0b-b1-claw_eval-p1,wrong_target,tool_router,feasible,feasible,feasible,feasible,feasible
+claw_eval,e0b-b1-claw_eval-p2,wrong_target,tool_router,feasible,feasible,feasible,feasible,feasible

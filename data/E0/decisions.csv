@@ -1,7 +1,19 @@
 rule,observed,decision
-D1,E0b not run,not evaluable
-D2,E0b not run,not evaluable
-D3,E0b not run,not evaluable
-D4,E0b not run,not evaluable
-D5,E0b not run,not evaluable
-D6,E0b not run,not evaluable
+D1:browsecomp,pass_rate=0.6833 aa_delta=10.00 clusters_with_two=0,excluded
+D1:hle,pass_rate=0.4844 aa_delta=9.38 clusters_with_two=0,excluded
+D1:gdpval,pass_rate=0.8466 aa_delta=7.14 clusters_with_two=0,excluded
+D1:claw_eval,pass_rate=0.8214 aa_delta=3.57 clusters_with_two=7,enters E2
+D2:browsecomp,primary_clusters=0,0 primary; rest secondary
+D2:hle,primary_clusters=0,0 primary; rest secondary
+D2:gdpval,primary_clusters=0,0 primary; rest secondary
+D2:claw_eval,primary_clusters=7,7 primary; rest secondary
+D3:browsecomp,aa_delta=10.00 widest_other=7.14,descriptive only
+D3:hle,aa_delta=9.38 widest_other=7.14,descriptive only
+D1prime,primary_clusters_in_included_sources=7 (min 8); included=['claw_eval'],pivot required: (i) policy reasoning_effort low (deviation stated) or (ii) build M2b web freeze and re-admit browsecomp
+D4,projected_usd(k=3)=16.06 budget=600.0,k=3
+D5:browsecomp,no held-out A/A,not evaluable
+D5:hle,no held-out A/A,not evaluable
+D5:gdpval,heldout_delta=6.67,45/source
+D5:claw_eval,heldout_delta=3.33,30/source
+D6,text_self_consistency=0.9855 (Flash re-judge replaced by P1),single judge
+D7,vision_self_consistency=1.0000 text_vs_vision_disagreement=0.0595 compared=168,gdpval E2 primary judge = text (deepseek-v4-pro); vision reported as secondary

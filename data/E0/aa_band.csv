@@ -1,0 +1,7 @@
+source,split,tasks,agreement,delta_points,ci95_low,ci95_high
+browsecomp,validation,10,0.7000,10.00,0.00,40.00
+hle,validation,32,0.7188,9.38,0.00,28.12
+gdpval,validation,56,0.8571,7.14,0.00,16.07
+gdpval,heldout,30,0.8667,6.67,0.00,20.00
+claw_eval,validation,56,0.8929,3.57,0.00,12.50
+claw_eval,heldout,30,0.9000,3.33,0.00,13.33

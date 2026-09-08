@@ -1,0 +1,17 @@
+source,failure_type,count
+browsecomp,deterministic,0
+browsecomp,stochastic,0
+browsecomp,unrepairable,0
+browsecomp,unreplayable,0
+hle,deterministic,0
+hle,stochastic,0
+hle,unrepairable,0
+hle,unreplayable,0
+gdpval,deterministic,3
+gdpval,stochastic,2
+gdpval,unrepairable,4
+gdpval,unreplayable,2
+claw_eval,deterministic,26
+claw_eval,stochastic,7
+claw_eval,unrepairable,7
+claw_eval,unreplayable,0

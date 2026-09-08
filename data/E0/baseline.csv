@@ -1,0 +1,9 @@
+source,run_id,tasks,rollouts,rollout_pass_rate,pass_hat_k_rate
+browsecomp,e0b-b1-browsecomp-p1,10,10,0.7000,0.7000
+browsecomp,e0b-b1-browsecomp-p2,10,10,0.6667,0.6000
+hle,e0b-b1-hle-p1,32,32,0.5312,0.5312
+hle,e0b-b1-hle-p2,32,32,0.4375,0.4375
+gdpval,e0b-b1-gdpval-p1,56,56,0.8182,0.8036
+gdpval,e0b-b1-gdpval-p2,56,56,0.8750,0.8750
+claw_eval,e0b-b1-claw_eval-p1,56,168,0.8155,0.7143
+claw_eval,e0b-b1-claw_eval-p2,56,168,0.8274,0.7500
