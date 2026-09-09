@@ -1,0 +1,15 @@
+source,failure_type,before_m32,after_m32
+gdpval,deterministic,3,1
+gdpval,stochastic,2,3
+gdpval,unrepairable,4,4
+gdpval,unreplayable,2,2
+gdpval,unresolved,0,1
+gdpval,candidates_confirmed_n>=5,,6
+gdpval,candidates_unconfirmed_fixed_k,,23
+claw_eval,deterministic,26,24
+claw_eval,stochastic,7,5
+claw_eval,unrepairable,7,8
+claw_eval,unreplayable,0,0
+claw_eval,unresolved,0,3
+claw_eval,candidates_confirmed_n>=5,,34
+claw_eval,candidates_unconfirmed_fixed_k,,107

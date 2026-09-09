@@ -1,0 +1,14 @@
+source,run_id,stage,tasks,rollouts,pass_rate_points
+gdpval,e0b-b2-gdpval-p1,E0b,30,30,80.00
+gdpval,e0b-b2-gdpval-p2,E0b,30,30,86.67
+gdpval,e0b-b2-gdpval-p3,E0d,30,30,76.67
+gdpval,e0b-b2-gdpval-p4,E0d,30,30,86.67
+gdpval,e0b-b2-gdpval-p5,E0d,30,30,83.33
+claw_eval,e0b-b2-claw_eval-p1,E0b,30,90,66.67
+claw_eval,e0b-b2-claw_eval-p2,E0b,30,90,70.00
+claw_eval,e0b-b2-claw_eval-p3,E0d,30,90,70.00
+claw_eval,e0b-b2-claw_eval-p4,E0d,30,90,63.33
+claw_eval,e0b-b2-claw_eval-p5,E0d,30,90,66.67
+claw_eval,e0b-b2-claw_eval-p6,E0d,30,90,70.00
+claw_eval,e0b-b2-claw_eval-p7,E0d,30,90,60.00
+claw_eval,e0b-b2-claw_eval-p8,E0d,30,90,70.00

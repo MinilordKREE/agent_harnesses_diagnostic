@@ -1,0 +1,9 @@
+source,run_id,cluster_id,decoy_component,decoy_step,step_basis,cause_label,severity,generation_seed,ref_plausibility,coh_plausibility,error
+gdpval,e0b-b1-gdpval-p1,c411077d9,wiring,4,validated_negative,contract_violation,high,0,1,1,
+claw_eval,e0b-b1-claw_eval-p1,cd68528c8,budget,1,validated_negative,budget_exhaustion,high,0,1,1,
+claw_eval,e0b-b1-claw_eval-p1,c734034d9,tool_shell,3,validated_negative,over_exploration,high,0,1,1,
+claw_eval,e0b-b1-claw_eval-p1,c27348614,tool_shell,6,validated_negative,over_exploration,medium,0,1,1,
+claw_eval,e0b-b1-claw_eval-p2,cbafea507,error_handling,2,validated_negative,error_recovery,high,0,4,1,
+claw_eval,e0b-b1-claw_eval-p2,ce078740c,tool_shell,1,validated_negative,insufficient_evidence,high,0,2,1,
+claw_eval,e0b-b1-claw_eval-p2,c34bd8091,entry,2,validated_negative,wrong_target,high,0,2,5,
+claw_eval,e0b-b1-claw_eval-p2,c16ae51b7,system_prompt,5,validated_negative,contract_violation,high,0,1,1,

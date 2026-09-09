@@ -1,0 +1,5 @@
+source,run_id,failures_reopened,candidates_reopened,failure_type_changed,oracle_step_changed,verdict_transitions,usd
+gdpval,e0b-b1-gdpval-p1,5,5,3,3,"{""negative->negative"": 1, ""positive->negative"": 1, ""positive->positive"": 1, ""positive->unresolved"": 1, ""unresolved->negative"": 1}",4.6576
+gdpval,e0b-b1-gdpval-p2,1,1,0,0,"{""unresolved->negative"": 1}",0.7255
+claw_eval,e0b-b1-claw_eval-p1,12,19,3,5,"{""negative->negative"": 5, ""positive->negative"": 2, ""positive->positive"": 5, ""positive->unresolved"": 1, ""unresolved->negative"": 3, ""unresolved->positive"": 1, ""unresolved->unresolved"": 2}",2.5185
+claw_eval,e0b-b1-claw_eval-p2,10,15,3,5,"{""negative->negative"": 2, ""negative->positive"": 1, ""positive->negative"": 1, ""positive->positive"": 5, ""positive->unresolved"": 2, ""unresolved->negative"": 1, ""unresolved->unresolved"": 3}",5.4677

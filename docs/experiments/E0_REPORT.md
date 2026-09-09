@@ -2,7 +2,7 @@
 
 Spec: `experiments/E0/spec.yaml`; runs: `runs/E0`; policy {'model': 'deepseek-v4-flash', 'temperature': 1.0, 'reasoning_effort': 'max'}; judge {'model': 'deepseek-v4-pro', 'temperature': 0.0, 'cached': True}; mock_today 2026-03-02; replay k=3, candidates<=5, economize=True; T_att=5; workers=4.
 
-Run git sha(s): 51fee3e6c8c16a4d3f44d45ab6302f4462353a58, a49339c86990716d00b1fc6a3e143b2a44753b3b, aca7d7ad2305b8e02d9b17f8888b556b7b78e7b9, c1c9a9f18ff7ee223de960f7e6ef1170824fc530, db5807f1f0608184b141c80d37488e1c842d1d49, f9799b335646aef34562154a8fe1a6b838dde8ce; spec sha(s) recorded in manifests: c3877fd8d5fd7f74e0e89d0f67cbb7f7eb950db630ce37c0105f51efead92576, dea6555ee544be1855b0fc2f2f4b1e00fa79e1b0eaced3185c48d898f616cfb0.
+Run git sha(s): 4f2276904b1c7589e104b1d0e5a9d2e55f27cb0e, 51fee3e6c8c16a4d3f44d45ab6302f4462353a58, a49339c86990716d00b1fc6a3e143b2a44753b3b, aca7d7ad2305b8e02d9b17f8888b556b7b78e7b9, c1c9a9f18ff7ee223de960f7e6ef1170824fc530, db5807f1f0608184b141c80d37488e1c842d1d49, f9799b335646aef34562154a8fe1a6b838dde8ce; spec sha(s) recorded in manifests: 9dd1247dd70a030f095b17c5d0391246a3d8a91e7b0975735f62b033dcfbd34e, c3877fd8d5fd7f74e0e89d0f67cbb7f7eb950db630ce37c0105f51efead92576, dea6555ee544be1855b0fc2f2f4b1e00fa79e1b0eaced3185c48d898f616cfb0.
 
 ## E0a pilot
 
@@ -104,7 +104,7 @@ B1 = 32 validation tasks x benchmark trials x 2 passes; B2 = held-out per_source
 
 ### E0b: gdpval text vs vision judge (every artifact)
 
-compared=168, disagreement=0.0595
+compared=256, disagreement=0.0625
 
 | run_id | task_id | replicate | text_passed | text_value | vision_model | vision_passed | vision_value | vision_used_images | agree | vision_error |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -277,6 +277,94 @@ compared=168, disagreement=0.0595
 | e0b-b2-gdpval-p2 | gdpval-ec591973-04d5-48c0-981c-1ab2fcec2dc1 | r1 | 1 | 0.7532 | deepseek-v4-flash-vision-exp | 1 | 0.7597 | 1 | 1 |  |
 | e0b-b2-gdpval-p2 | gdpval-efca245f-c24f-4f75-a9d5-59201330ab7a | r1 | 1 | 0.9902 | deepseek-v4-flash-vision-exp | 1 | 0.9804 | 1 | 1 |  |
 | e0b-b2-gdpval-p2 | gdpval-f3351922-dbdd-45da-85c5-e7110696bbe5 | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 0.9412 | 1 | 1 |  |
+| e0b-b2-gdpval-p3 | gdpval-01d7e53e-0513-4109-a242-8ccaf442cd21 | r1 | 1 | 0.9524 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p3 | gdpval-0353ee0c-18b5-4ad3-88e8-e001d223e1d7 | r1 | 0 | 0.4679 | deepseek-v4-flash-vision-exp | 1 | 0.9908 | 1 | 0 |  |
+| e0b-b2-gdpval-p3 | gdpval-045aba2e-4093-42aa-ab7f-159cc538278c | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 0.9726 | 1 | 1 |  |
+| e0b-b2-gdpval-p3 | gdpval-05389f78-589a-473c-a4ae-67c61050bfca | r1 | 1 | 0.9773 | deepseek-v4-flash-vision-exp | 1 | 0.9773 | 1 | 1 |  |
+| e0b-b2-gdpval-p3 | gdpval-11593a50-734d-4449-b5b4-f8986a133fd8 | r1 | 0 | 0.5283 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 0 |  |
+| e0b-b2-gdpval-p3 | gdpval-116e791e-890c-42b1-ba90-1db02e8bfd45 | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 0.9531 | 1 | 1 |  |
+| e0b-b2-gdpval-p3 | gdpval-19403010-3e5c-494e-a6d3-13594e99f6af | r1 | 1 | 0.6371 | deepseek-v4-flash-vision-exp | 1 | 0.7097 | 1 | 1 |  |
+| e0b-b2-gdpval-p3 | gdpval-22c0809b-f8db-489e-93b3-b4da225e3e0e | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p3 | gdpval-2d06bc0a-89c6-4e89-9417-5ffe725c1bc6 | r1 | 1 | 0.9697 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p3 | gdpval-401a07f1-d57e-4bb0-889b-22de8c900f0e | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p3 | gdpval-43dc9778-450b-4b46-b77e-b6d82b202035 | r1 | 0 | 0.3223 | deepseek-v4-flash-vision-exp | 0 | 0.3719 | 1 | 1 |  |
+| e0b-b2-gdpval-p3 | gdpval-4520f882-715a-482d-8e87-1cb3cbdfe975 | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p3 | gdpval-47ef842d-8eac-4b90-bda8-dd934c228c96 | r1 | 0 | 0.3737 | deepseek-v4-flash-vision-exp | 1 | 0.9293 | 1 | 0 |  |
+| e0b-b2-gdpval-p3 | gdpval-4b98ccce-9e42-44e9-9115-6fc3e79de288 | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p3 | gdpval-61f546a8-c374-467f-95cc-d0d9b5656eb6 | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p3 | gdpval-76d10872-9ffa-4ede-83ee-e0f1ec5e2b8d | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p3 | gdpval-7bbfcfe9-132d-4194-82bb-d6f29d001b01 | r1 | 0 | 0.5849 | deepseek-v4-flash-vision-exp | 0 | 0.5660 | 1 | 1 |  |
+| e0b-b2-gdpval-p3 | gdpval-85d95ce5-b20c-41e2-834e-e788ce9622b6 | r1 | 1 | 0.9412 | deepseek-v4-flash-vision-exp | 1 | 0.8588 | 1 | 1 |  |
+| e0b-b2-gdpval-p3 | gdpval-9e39df84-ac57-4c9b-a2e3-12b8abf2c797 | r1 | 0 | 0.5000 | deepseek-v4-flash-vision-exp | 0 | 0.4583 | 1 | 1 |  |
+| e0b-b2-gdpval-p3 | gdpval-aad21e4c-1d43-45fc-899a-97754a1b1b63 | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p3 | gdpval-ab81b076-e5d8-473a-9bdb-7ea7c38f6ebc | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 0.9038 | 1 | 1 |  |
+| e0b-b2-gdpval-p3 | gdpval-b1a79ce1-86b0-41fb-97dc-9206dfd7b044 | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 0.9811 | 1 | 1 |  |
+| e0b-b2-gdpval-p3 | gdpval-bb499d9c-0263-4684-9238-75e8e86077b1 | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p3 | gdpval-be830ca0-b352-4658-a5bd-57139d6780ba | r1 | 1 | 0.6883 | deepseek-v4-flash-vision-exp | 1 | 0.7662 | 1 | 1 |  |
+| e0b-b2-gdpval-p3 | gdpval-cecac8f9-8203-4ebd-ad49-54436a8c4171 | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p3 | gdpval-e14e32ba-d310-4d45-9b8a-6d73d0ece1ae | r1 | 1 | 0.6897 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p3 | gdpval-ec591973-04d5-48c0-981c-1ab2fcec2dc1 | r1 | 1 | 0.9091 | deepseek-v4-flash-vision-exp | 1 | 0.7208 | 1 | 1 |  |
+| e0b-b2-gdpval-p3 | gdpval-efca245f-c24f-4f75-a9d5-59201330ab7a | r1 | 1 | 0.9412 | deepseek-v4-flash-vision-exp | 1 | 0.9412 | 1 | 1 |  |
+| e0b-b2-gdpval-p3 | gdpval-f3351922-dbdd-45da-85c5-e7110696bbe5 | r1 | 1 | 0.9882 | deepseek-v4-flash-vision-exp | 1 | 0.9882 | 1 | 1 |  |
+| e0b-b2-gdpval-p4 | gdpval-01d7e53e-0513-4109-a242-8ccaf442cd21 | r1 | 1 | 0.9286 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p4 | gdpval-0353ee0c-18b5-4ad3-88e8-e001d223e1d7 | r1 | 1 | 0.7982 | deepseek-v4-flash-vision-exp | 1 | 0.9908 | 1 | 1 |  |
+| e0b-b2-gdpval-p4 | gdpval-045aba2e-4093-42aa-ab7f-159cc538278c | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 0.9863 | 1 | 1 |  |
+| e0b-b2-gdpval-p4 | gdpval-05389f78-589a-473c-a4ae-67c61050bfca | r1 | 1 | 0.7045 | deepseek-v4-flash-vision-exp | 1 | 0.7614 | 1 | 1 |  |
+| e0b-b2-gdpval-p4 | gdpval-11593a50-734d-4449-b5b4-f8986a133fd8 | r1 | 0 | 0.5283 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 0 |  |
+| e0b-b2-gdpval-p4 | gdpval-116e791e-890c-42b1-ba90-1db02e8bfd45 | r1 | 1 | 0.9219 | deepseek-v4-flash-vision-exp | 1 | 0.9688 | 1 | 1 |  |
+| e0b-b2-gdpval-p4 | gdpval-19403010-3e5c-494e-a6d3-13594e99f6af | r1 | 1 | 0.6371 | deepseek-v4-flash-vision-exp | 1 | 0.7258 | 1 | 1 |  |
+| e0b-b2-gdpval-p4 | gdpval-22c0809b-f8db-489e-93b3-b4da225e3e0e | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p4 | gdpval-2d06bc0a-89c6-4e89-9417-5ffe725c1bc6 | r1 | 1 | 0.9697 | deepseek-v4-flash-vision-exp | 1 | 0.9697 | 1 | 1 |  |
+| e0b-b2-gdpval-p4 | gdpval-401a07f1-d57e-4bb0-889b-22de8c900f0e | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p4 | gdpval-43dc9778-450b-4b46-b77e-b6d82b202035 | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p4 | gdpval-4520f882-715a-482d-8e87-1cb3cbdfe975 | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p4 | gdpval-47ef842d-8eac-4b90-bda8-dd934c228c96 | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p4 | gdpval-4b98ccce-9e42-44e9-9115-6fc3e79de288 | r1 | 0 | 0.4808 | deepseek-v4-flash-vision-exp | 1 | 0.9904 | 1 | 0 |  |
+| e0b-b2-gdpval-p4 | gdpval-61f546a8-c374-467f-95cc-d0d9b5656eb6 | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p4 | gdpval-76d10872-9ffa-4ede-83ee-e0f1ec5e2b8d | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p4 | gdpval-7bbfcfe9-132d-4194-82bb-d6f29d001b01 | r1 | 0 | 0.5472 | deepseek-v4-flash-vision-exp | 0 | 0.5283 | 1 | 1 |  |
+| e0b-b2-gdpval-p4 | gdpval-85d95ce5-b20c-41e2-834e-e788ce9622b6 | r1 | 1 | 0.9412 | deepseek-v4-flash-vision-exp | 1 | 0.9412 | 1 | 1 |  |
+| e0b-b2-gdpval-p4 | gdpval-9e39df84-ac57-4c9b-a2e3-12b8abf2c797 | r1 | 1 | 0.9583 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p4 | gdpval-aad21e4c-1d43-45fc-899a-97754a1b1b63 | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 0.9764 | 1 | 1 |  |
+| e0b-b2-gdpval-p4 | gdpval-ab81b076-e5d8-473a-9bdb-7ea7c38f6ebc | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p4 | gdpval-b1a79ce1-86b0-41fb-97dc-9206dfd7b044 | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 0.9811 | 1 | 1 |  |
+| e0b-b2-gdpval-p4 | gdpval-bb499d9c-0263-4684-9238-75e8e86077b1 | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 0.9775 | 1 | 1 |  |
+| e0b-b2-gdpval-p4 | gdpval-be830ca0-b352-4658-a5bd-57139d6780ba | r1 | 1 | 0.7143 | deepseek-v4-flash-vision-exp | 1 | 0.7403 | 1 | 1 |  |
+| e0b-b2-gdpval-p4 | gdpval-cecac8f9-8203-4ebd-ad49-54436a8c4171 | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p4 | gdpval-e14e32ba-d310-4d45-9b8a-6d73d0ece1ae | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p4 | gdpval-ec591973-04d5-48c0-981c-1ab2fcec2dc1 | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 0.8377 | 1 | 1 |  |
+| e0b-b2-gdpval-p4 | gdpval-efca245f-c24f-4f75-a9d5-59201330ab7a | r1 | 1 | 0.9804 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p4 | gdpval-f3351922-dbdd-45da-85c5-e7110696bbe5 | r1 | 1 | 0.9882 | deepseek-v4-flash-vision-exp | 1 | 0.9529 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-01d7e53e-0513-4109-a242-8ccaf442cd21 | r1 | 1 | 0.7857 | deepseek-v4-flash-vision-exp | 1 | 0.7619 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-0353ee0c-18b5-4ad3-88e8-e001d223e1d7 | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-045aba2e-4093-42aa-ab7f-159cc538278c | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 0.9589 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-05389f78-589a-473c-a4ae-67c61050bfca | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 0.9886 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-11593a50-734d-4449-b5b4-f8986a133fd8 | r1 | 0 | 0.4528 | deepseek-v4-flash-vision-exp | 1 | 0.8868 | 1 | 0 |  |
+| e0b-b2-gdpval-p5 | gdpval-116e791e-890c-42b1-ba90-1db02e8bfd45 | r1 | 1 | 0.7656 | deepseek-v4-flash-vision-exp | 1 | 0.7500 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-19403010-3e5c-494e-a6d3-13594e99f6af | r1 | 1 | 0.6210 | deepseek-v4-flash-vision-exp | 1 | 0.7500 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-22c0809b-f8db-489e-93b3-b4da225e3e0e | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-2d06bc0a-89c6-4e89-9417-5ffe725c1bc6 | r1 | 1 | 0.9697 | deepseek-v4-flash-vision-exp | 1 | 0.9697 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-401a07f1-d57e-4bb0-889b-22de8c900f0e | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-43dc9778-450b-4b46-b77e-b6d82b202035 | r1 | 0 | 0.1901 | deepseek-v4-flash-vision-exp | 0 | 0.2975 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-4520f882-715a-482d-8e87-1cb3cbdfe975 | r1 | 0 | 0.5486 | deepseek-v4-flash-vision-exp | 0 | 0.5257 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-47ef842d-8eac-4b90-bda8-dd934c228c96 | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 0.9596 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-4b98ccce-9e42-44e9-9115-6fc3e79de288 | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-5f6c57dd-feb6-4e70-b152-4969d92d1608 | r1 | 1 | 0.9594 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-61f546a8-c374-467f-95cc-d0d9b5656eb6 | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-76d10872-9ffa-4ede-83ee-e0f1ec5e2b8d | r1 | 1 | 0.9527 | deepseek-v4-flash-vision-exp | 1 | 0.9662 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-7bbfcfe9-132d-4194-82bb-d6f29d001b01 | r1 | 0 | 0.5849 | deepseek-v4-flash-vision-exp | 0 | 0.5660 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-85d95ce5-b20c-41e2-834e-e788ce9622b6 | r1 | 1 | 0.9412 | deepseek-v4-flash-vision-exp | 1 | 0.9412 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-9e39df84-ac57-4c9b-a2e3-12b8abf2c797 | r1 | 0 | 0.5000 | deepseek-v4-flash-vision-exp | 0 | 0.5000 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-aad21e4c-1d43-45fc-899a-97754a1b1b63 | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-ab81b076-e5d8-473a-9bdb-7ea7c38f6ebc | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 0.9423 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-b1a79ce1-86b0-41fb-97dc-9206dfd7b044 | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 0.9434 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-bb499d9c-0263-4684-9238-75e8e86077b1 | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 0.9775 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-be830ca0-b352-4658-a5bd-57139d6780ba | r1 | 1 | 0.6883 | deepseek-v4-flash-vision-exp | 1 | 0.7532 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-cecac8f9-8203-4ebd-ad49-54436a8c4171 | r1 | 1 | 0.8800 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-e14e32ba-d310-4d45-9b8a-6d73d0ece1ae | r1 | 1 | 0.7586 | deepseek-v4-flash-vision-exp | 1 | 0.9310 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-ec591973-04d5-48c0-981c-1ab2fcec2dc1 | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 0.8506 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-efca245f-c24f-4f75-a9d5-59201330ab7a | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 1.0000 | 1 | 1 |  |
+| e0b-b2-gdpval-p5 | gdpval-f3351922-dbdd-45da-85c5-e7110696bbe5 | r1 | 1 | 1.0000 | deepseek-v4-flash-vision-exp | 1 | 0.9647 | 1 | 1 |  |
 
 ### E0b: baseline
 
@@ -314,13 +402,13 @@ compared=168, disagreement=0.0595
 | hle | stochastic | 0 |
 | hle | unrepairable | 0 |
 | hle | unreplayable | 0 |
-| gdpval | deterministic | 3 |
-| gdpval | stochastic | 2 |
+| gdpval | deterministic | 1 |
+| gdpval | stochastic | 3 |
 | gdpval | unrepairable | 4 |
 | gdpval | unreplayable | 2 |
-| claw_eval | deterministic | 26 |
-| claw_eval | stochastic | 7 |
-| claw_eval | unrepairable | 7 |
+| claw_eval | deterministic | 24 |
+| claw_eval | stochastic | 5 |
+| claw_eval | unrepairable | 8 |
 | claw_eval | unreplayable | 0 |
 
 ### E0b: references
@@ -338,24 +426,24 @@ compared=168, disagreement=0.0595
 |---|---|---|---|---|---|---|---|---|---|
 | browsecomp | 0 | 0 | 0 | 0 | 0 | 0 |  | 0 |  |
 | hle | 0 | 0 | 0 | 0 | 0 | 0 |  | 0 |  |
-| gdpval | 11 | 5 | 3 | 2 | 4 | 2 | 5.00 | 10 | 0.4306 |
-| claw_eval | 40 | 33 | 26 | 7 | 7 | 0 | 3.77 | 12 | 0.2171 |
+| gdpval | 11 | 4 | 1 | 3 | 4 | 2 | 5.00 | 10 | 0.4306 |
+| claw_eval | 40 | 29 | 24 | 5 | 8 | 0 | 3.77 | 12 | 0.2171 |
 
 ### E0b: clusters
 
 | source | n_clusters | sizes | singleton_fraction | deterministic_fraction | clusters_with_two |
 |---|---|---|---|---|---|
-| gdpval | 5 | [1, 1, 1, 1, 1] | 1.0000 | 0.6000 | 0 |
-| claw_eval | 14 | [7, 4, 4, 3, 3, 3, 2, 1, 1, 1, 1, 1, 1, 1] | 0.5000 | 0.7143 | 7 |
+| gdpval | 3 | [2, 1, 1] | 0.6667 | 0.3333 | 1 |
+| claw_eval | 15 | [5, 4, 3, 3, 3, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1] | 0.6000 | 0.8000 | 6 |
 
 ### E0b: leakage
 
 | source | run_id | n | top1 | top3 | chance_top1 |
 |---|---|---|---|---|---|
-| gdpval | e0b-b1-gdpval-p1 | 4 | 0.7500 | 0.7500 | 0.0556 |
+| gdpval | e0b-b1-gdpval-p1 | 2 | 0.5000 | 0.5000 | 0.0556 |
 | gdpval | e0b-b1-gdpval-p2 | 1 | 0.0000 | 0.0000 | 0.0556 |
-| claw_eval | e0b-b1-claw_eval-p1 | 10 | 0.4000 | 0.5000 | 0.0556 |
-| claw_eval | e0b-b1-claw_eval-p2 | 10 | 0.3000 | 0.6000 | 0.0556 |
+| claw_eval | e0b-b1-claw_eval-p1 | 11 | 0.4545 | 0.5455 | 0.0556 |
+| claw_eval | e0b-b1-claw_eval-p2 | 8 | 0.1250 | 0.6250 | 0.0556 |
 
 ### E0b: judge calibration
 
@@ -363,6 +451,144 @@ compared=168, disagreement=0.0595
 |---|---|---|---|---|
 | text (deepseek-v4-pro) | 69 | 69 | 0.9855 | none: the Evo-Bench snapshot releases expected answers and rubrics, no per-trajectory judge labels |
 | vision (gdpval secondary) | 44 | 41 | 1.0000 | none: the Evo-Bench snapshot releases expected answers and rubrics, no per-trajectory judge labels |
+
+## E0d calibration addendum (M3.2)
+
+E0c (reasoning_effort low) status: **not_run** (max condition only; E0c follows E0d). E0d spend cap 40.0 USD; stage order ['B', 'C', 'D', 'A'].
+
+### E0d-A: seed noise band (held-out passes of the seed harness)
+
+| source | passes | mean | sigma_seed | pairs | |d| mean | p90 | p95 |
+|---|---|---|---|---|---|---|---|
+| browsecomp | 0 |  |  |  |  |  |  |
+| hle | 0 |  |  |  |  |  |  |
+| gdpval | 5 | 82.67 | 4.35 | 10 | 5.33 | 10.00 | 10.00 |
+| claw_eval | 8 | 67.08 | 3.75 | 28 | 4.17 | 10.00 | 10.00 |
+
+### E0d-B: replay escalation (marginal fixed-k verdicts re-opened)
+
+| source | run | failures | candidates | type changed | oracle changed | transitions | usd |
+|---|---|---|---|---|---|---|---|
+| gdpval | e0b-b1-gdpval-p1 | 5 | 5 | 3 | 3 | {"negative->negative": 1, "positive->negative": 1, "positive->positive": 1, "positive->unresolved": 1, "unresolved->negative": 1} | 4.6576 |
+| gdpval | e0b-b1-gdpval-p2 | 1 | 1 | 0 | 0 | {"unresolved->negative": 1} | 0.7255 |
+| claw_eval | e0b-b1-claw_eval-p1 | 12 | 19 | 3 | 5 | {"negative->negative": 5, "positive->negative": 2, "positive->positive": 5, "positive->unresolved": 1, "unresolved->negative": 3, "unresolved->positive": 1, "unresolved->unresolved": 2} | 2.5185 |
+| claw_eval | e0b-b1-claw_eval-p2 | 10 | 15 | 3 | 5 | {"negative->negative": 2, "negative->positive": 1, "positive->negative": 1, "positive->positive": 5, "positive->unresolved": 2, "unresolved->negative": 1, "unresolved->unresolved": 3} | 5.4677 |
+
+### E0d-B: failure types before and after M3.2
+
+| source | failure_type | before | after |
+|---|---|---|---|
+| gdpval | deterministic | 3 | 1 |
+| gdpval | stochastic | 2 | 3 |
+| gdpval | unrepairable | 4 | 4 |
+| gdpval | unreplayable | 2 | 2 |
+| gdpval | unresolved | 0 | 1 |
+| gdpval | candidates_confirmed_n>=5 |  | 6 |
+| gdpval | candidates_unconfirmed_fixed_k |  | 23 |
+| claw_eval | deterministic | 26 | 24 |
+| claw_eval | stochastic | 7 | 5 |
+| claw_eval | unrepairable | 7 | 8 |
+| claw_eval | unreplayable | 0 | 0 |
+| claw_eval | unresolved | 0 | 3 |
+| claw_eval | candidates_confirmed_n>=5 |  | 34 |
+| claw_eval | candidates_unconfirmed_fixed_k |  | 107 |
+
+### E0d-C: COH-WRONG plausibility parity (per source, pooled over passes)
+
+| source | rounds | final seed | n | mean diff | ref> | coh> | ties | p | status |
+|---|---|---|---|---|---|---|---|---|---|
+| gdpval | 1 | 0 | 1 | 0.0000 | 0 | 0 | 1 |  | ok |
+| claw_eval | 1 | 0 | 7 | 0.1429 | 2 | 1 | 4 | 1.000 | ok |
+
+### E0d-C: COH-WRONG assignments and scores
+
+| source | run | cluster | decoy | step | basis | cause | sev | gen | ref | coh | error |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| gdpval | e0b-b1-gdpval-p1 | c411077d9 | wiring | 4 | validated_negative | contract_violation | high | 0 | 1 | 1 |  |
+| claw_eval | e0b-b1-claw_eval-p1 | cd68528c8 | budget | 1 | validated_negative | budget_exhaustion | high | 0 | 1 | 1 |  |
+| claw_eval | e0b-b1-claw_eval-p1 | c734034d9 | tool_shell | 3 | validated_negative | over_exploration | high | 0 | 1 | 1 |  |
+| claw_eval | e0b-b1-claw_eval-p1 | c27348614 | tool_shell | 6 | validated_negative | over_exploration | medium | 0 | 1 | 1 |  |
+| claw_eval | e0b-b1-claw_eval-p2 | cbafea507 | error_handling | 2 | validated_negative | error_recovery | high | 0 | 4 | 1 |  |
+| claw_eval | e0b-b1-claw_eval-p2 | ce078740c | tool_shell | 1 | validated_negative | insufficient_evidence | high | 0 | 2 | 1 |  |
+| claw_eval | e0b-b1-claw_eval-p2 | c34bd8091 | entry | 2 | validated_negative | wrong_target | high | 0 | 2 | 5 |  |
+| claw_eval | e0b-b1-claw_eval-p2 | c16ae51b7 | system_prompt | 5 | validated_negative | contract_violation | high | 0 | 1 | 1 |  |
+
+### E0d-D: privileged-information probe (recovery from the rendered diagnosis alone)
+
+| source | arm | n | top1 | top3 | origin top1 | tool P | tool R | category | chance1 | chance3 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| gdpval | coherent_wrong | 1 | 0.0000 | 0.0000 | 0.0000 | 1.0000 | 1.0000 | 0.0000 | 0.0179 | 0.0536 |
+| gdpval | reference | 3 | 0.0000 | 0.3333 | 0.0000 | 1.0000 | 1.0000 | 0.3333 | 0.0179 | 0.0536 |
+| gdpval | shuffled | 2 | 0.0000 | 0.5000 | 0.0000 | 1.0000 | 1.0000 | 0.5000 | 0.0179 | 0.0536 |
+| gdpval | system | 3 | 0.3333 | 0.3333 | 0.3333 | 1.0000 | 1.0000 | 0.3333 | 0.0179 | 0.0536 |
+| claw_eval | coherent_wrong | 7 | 0.4286 | 0.8571 | 0.4286 | 0.6571 | 0.7857 | 0.7143 | 0.0179 | 0.0536 |
+| claw_eval | reference | 19 | 0.5263 | 0.8421 | 0.5263 | 0.7518 | 0.7395 | 0.6842 | 0.0179 | 0.0536 |
+| claw_eval | shuffled | 19 | 0.1053 | 0.3684 | 0.4211 | 0.3878 | 0.3640 | 0.3158 | 0.0179 | 0.0536 |
+| claw_eval | system | 19 | 0.5263 | 0.8421 | 0.5263 | 0.6711 | 0.6544 | 0.7368 | 0.0179 | 0.0536 |
+
+### E0d-E: component ambiguity (attribution records of the reference arm)
+
+| source | failures | rule | llm | candidate-set sizes | clusters | component_unique |
+|---|---|---|---|---|---|---|
+| gdpval | 4 | 0.0000 | 1.0000 | {"3": 3, "4": 1} | 3 | 0 |
+| claw_eval | 29 | 0.0345 | 0.9655 | {"1": 1, "2": 3, "3": 19, "4": 6} | 15 | 1 |
+
+### M3.2: decoy exclusion audit (old rule vs full candidate set)
+
+Old-rule decoys that sat inside the candidate set: 4 of 44 (cluster, tier) draws.
+
+| source | clusters | lose near | lose far |
+|---|---|---|---|
+| gdpval | 3 | 0 | 0 |
+| claw_eval | 19 | 0 | 0 |
+
+### E0d-F: minimum detectable effect (cluster-level sign-flip test, alpha 0.05, power 0.8)
+
+Cost model: 11 arms x N x k x (proposal call + passes x held-out pass); inputs from the E0b ledgers.
+
+| source | N | k | passes | sigma | spread | MDE | cost | <=3 |
+|---|---|---|---|---|---|---|---|---|
+| claw_eval | 7 | 3 | 1 | 3.75 | 5.00 | 7.50 | 451.05 | 0 |
+| claw_eval | 7 | 3 | 2 | 3.75 | 5.00 | 7.00 | 900.93 | 0 |
+| claw_eval | 7 | 5 | 1 | 3.75 | 5.00 | 7.00 | 751.74 | 0 |
+| claw_eval | 7 | 5 | 2 | 3.75 | 5.00 | 7.25 | 1501.56 | 0 |
+| claw_eval | 8 | 3 | 1 | 3.75 | 5.00 | 6.75 | 515.48 | 0 |
+| claw_eval | 8 | 3 | 2 | 3.75 | 5.00 | 6.50 | 1029.64 | 0 |
+| claw_eval | 8 | 5 | 1 | 3.75 | 5.00 | 6.50 | 859.14 | 0 |
+| claw_eval | 8 | 5 | 2 | 3.75 | 5.00 | 6.25 | 1716.06 | 0 |
+| claw_eval | 10 | 3 | 1 | 3.75 | 5.00 | 5.75 | 644.35 | 0 |
+| claw_eval | 10 | 3 | 2 | 3.75 | 5.00 | 5.50 | 1287.05 | 0 |
+| claw_eval | 10 | 5 | 1 | 3.75 | 5.00 | 5.50 | 1073.92 | 0 |
+| claw_eval | 10 | 5 | 2 | 3.75 | 5.00 | 5.25 | 2145.08 | 0 |
+| claw_eval | 14 | 3 | 1 | 3.75 | 5.00 | 4.75 | 902.09 | 0 |
+| claw_eval | 14 | 3 | 2 | 3.75 | 5.00 | 4.25 | 1801.87 | 0 |
+| claw_eval | 14 | 5 | 1 | 3.75 | 5.00 | 4.75 | 1503.49 | 0 |
+| claw_eval | 14 | 5 | 2 | 3.75 | 5.00 | 4.25 | 3003.11 | 0 |
+| gdpval | 7 | 3 | 1 | 4.35 | 5.00 | 7.50 | 597.70 | 0 |
+| gdpval | 7 | 3 | 2 | 4.35 | 5.00 | 7.25 | 1193.56 | 0 |
+| gdpval | 7 | 5 | 1 | 4.35 | 5.00 | 7.25 | 996.17 | 0 |
+| gdpval | 7 | 5 | 2 | 4.35 | 5.00 | 7.25 | 1989.27 | 0 |
+| gdpval | 8 | 3 | 1 | 4.35 | 5.00 | 7.00 | 683.09 | 0 |
+| gdpval | 8 | 3 | 2 | 4.35 | 5.00 | 6.50 | 1364.07 | 0 |
+| gdpval | 8 | 5 | 1 | 4.35 | 5.00 | 6.50 | 1138.48 | 0 |
+| gdpval | 8 | 5 | 2 | 4.35 | 5.00 | 6.25 | 2273.45 | 0 |
+| gdpval | 10 | 3 | 1 | 4.35 | 5.00 | 6.00 | 853.86 | 0 |
+| gdpval | 10 | 3 | 2 | 4.35 | 5.00 | 5.50 | 1705.09 | 0 |
+| gdpval | 10 | 5 | 1 | 4.35 | 5.00 | 5.50 | 1423.10 | 0 |
+| gdpval | 10 | 5 | 2 | 4.35 | 5.00 | 5.25 | 2841.81 | 0 |
+| gdpval | 14 | 3 | 1 | 4.35 | 5.00 | 4.75 | 1195.40 | 0 |
+| gdpval | 14 | 3 | 2 | 4.35 | 5.00 | 4.50 | 2387.12 | 0 |
+| gdpval | 14 | 5 | 1 | 4.35 | 5.00 | 4.75 | 1992.34 | 0 |
+| gdpval | 14 | 5 | 2 | 4.35 | 5.00 | 4.25 | 3978.54 | 0 |
+
+### E0d-G: measurability funnel (per source; feasibility counts per-run clusters)
+
+| source | rollouts | failed_rollouts | failed_tasks | genuine_references | replayable | validated_positive | validated_negative | unresolved | unreplayable | clusters | clusters_ge2 | feasible_where_near | feasible_where_far | feasible_why | feasible_how | feasible_shuffled | feasible_coherent_wrong |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| browsecomp | 20 | 6 | 4 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| hle | 64 | 33 | 21 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| gdpval | 112 | 17 | 13 | 11 | 11 | 1 | 7 | 1 | 2 | 3 | 1 | 3 | 3 | 2 | 2 | 2 | 3 |
+| claw_eval | 336 | 60 | 18 | 23 | 40 | 24 | 13 | 3 | 0 | 15 | 6 | 19 | 19 | 19 | 19 | 19 | 19 |
 
 ## Incidents and operator interventions
 
@@ -378,6 +604,8 @@ compared=168, disagreement=0.0595
 | 2026-09-08T02:31 | code_fix | report: the pass glob e0b-b1-<source>-p* also matched the -ref reference runs, so the A/A band paired pass 1 with its reference run and the D1 pass rate averaged reference retries in (caught on a dry run before the final report; no run data affected). Feasibility of clusters merged across passes is now matched by (cause, component) instead of the member-hash id. |
 | 2026-09-08T03:27 | disconnect | editor session disconnected between 02:31 and 03:26 UTC and took the detached runner with it during the claw-p2 replay; 302 replay rollouts kept (done.json markers), 4 in-flight rollouts of one task redone on resume; runner restarted from the same commit |
 | 2026-09-08T03:54 | deviation | B7 judge calibration ran twice with different candidate pools: the separate --stages B7 run pooled artifacts through the same p* glob and drew 3 of its 50 from e0b-b1-gdpval-p1-ref; the resumed runner pooled from the seed passes only and re-judged its own draw of 50 (cache bypassed). judge_calibration.json keeps both draws, so the report's self-consistency uses more than the spec's n=50 artifacts; the reference-run artifacts are seed-policy rollouts on the same tasks |
+| 2026-09-08T10:56 | start | E0d launched at commit 78c7b9d (tag m3.2; the addendum spec amendment landed in the same commit because the two-commit split failed on a pre-commit mypy run). Order B C D A, cap 40 USD on E0d ledgers only; E0c not run. |
+| 2026-09-08T13:00 | restart | E0d runner restarted at commit 4f22769 to escalate marginal failures and candidates concurrently (the first run serialised them: 3 GDPval failures in 2 h); finished escalation rows and rollouts with done.json are reused, 2 in-flight GDPval rollouts lost |
 
 ## Decision rules
 
@@ -397,23 +625,29 @@ compared=168, disagreement=0.0595
 
 **D7.** The E2 primary judge for gdpval is the vision judge iff its self-consistency >= 0.90 AND text-vs-vision disagreement >= 10% of artifacts (i.e. the text judge is missing rubric evidence); otherwise the text judge stays primary and the vision verdict is reported as secondary. Whichever is chosen is frozen in the E2 spec and applies to every gdpval arm; Claw keeps V4 Pro. Judge model per source is recorded in every manifest.
 
+**D8.** delta_meaningful = 3 points. E2 uses the cheapest (N, k, passes) configuration with MDE <= 3 if one exists within owner_budget_usd; otherwise the best available configuration, and the paper states the exclusion bound (the smallest effect the design would have detected) rather than a null.
+
 | rule | observed | decision |
 |---|---|---|
 | D1:browsecomp | pass_rate=0.6833 aa_delta=10.00 clusters_with_two=0 | excluded |
 | D1:hle | pass_rate=0.4844 aa_delta=9.38 clusters_with_two=0 | excluded |
-| D1:gdpval | pass_rate=0.8466 aa_delta=7.14 clusters_with_two=0 | excluded |
-| D1:claw_eval | pass_rate=0.8214 aa_delta=3.57 clusters_with_two=7 | enters E2 |
+| D1:gdpval | pass_rate=0.8466 aa_delta=7.14 clusters_with_two=1 | excluded |
+| D1:claw_eval | pass_rate=0.8214 aa_delta=3.57 clusters_with_two=6 | enters E2 |
 | D2:browsecomp | primary_clusters=0 | 0 primary; rest secondary |
 | D2:hle | primary_clusters=0 | 0 primary; rest secondary |
-| D2:gdpval | primary_clusters=0 | 0 primary; rest secondary |
-| D2:claw_eval | primary_clusters=7 | 7 primary; rest secondary |
+| D2:gdpval | primary_clusters=1 | 1 primary; rest secondary |
+| D2:claw_eval | primary_clusters=6 | 6 primary; rest secondary |
 | D3:browsecomp | aa_delta=10.00 widest_other=7.14 | descriptive only |
 | D3:hle | aa_delta=9.38 widest_other=7.14 | descriptive only |
-| D1prime | primary_clusters_in_included_sources=7 (min 8); included=['claw_eval'] | pivot required: (i) policy reasoning_effort low (deviation stated) or (ii) build M2b web freeze and re-admit browsecomp |
-| D4 | projected_usd(k=3)=16.06 budget=600.0 | k=3 |
+| D1prime | primary_clusters_in_included_sources=6 (min 8); included=['claw_eval'] | pivot required: (i) policy reasoning_effort low (deviation stated) or (ii) build M2b web freeze and re-admit browsecomp |
+| D4 | projected_usd(k=3)=10.79 budget=600.0 | k=3 |
 | D5:browsecomp | no held-out A/A | not evaluable |
 | D5:hle | no held-out A/A | not evaluable |
 | D5:gdpval | heldout_delta=6.67 | 45/source |
 | D5:claw_eval | heldout_delta=3.33 | 30/source |
 | D6 | text_self_consistency=0.9855 (Flash re-judge replaced by P1) | single judge |
-| D7 | vision_self_consistency=1.0000 text_vs_vision_disagreement=0.0595 compared=168 | gdpval E2 primary judge = text (deepseek-v4-pro); vision reported as secondary |
+| D7 | vision_self_consistency=1.0000 text_vs_vision_disagreement=0.0625 compared=256 | gdpval E2 primary judge = text (deepseek-v4-pro); vision reported as secondary |
+| D8:claw_eval | N=8 k=3 passes=1 MDE=6.75 points cost=515.48 USD (delta_meaningful=3.0) | no configuration within owner_budget_usd reaches delta_meaningful: best available within the budget; the paper states the exclusion bound 6.75 points |
+| D8:gdpval | N=7 k=3 passes=1 MDE=7.50 points cost=597.70 USD (delta_meaningful=3.0) | no configuration within owner_budget_usd reaches delta_meaningful: best available within the budget; the paper states the exclusion bound 7.50 points |
+| COH-WRONG:claw_eval | parity ok | arm admitted |
+| COH-WRONG:gdpval | parity ok | arm admitted |

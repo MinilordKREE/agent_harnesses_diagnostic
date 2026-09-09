@@ -7,7 +7,20 @@ gdpval,e0b-b1-gdpval-p1,1,"{""TypeError"": 1}",0,1,2
 gdpval,e0b-b1-gdpval-p2,0,{},0,0,0
 gdpval,e0b-b1-gdpval-p1-ref,1,"{""TypeError"": 1}",0,1,2
 gdpval,e0b-b1-gdpval-p2-ref,0,{},0,0,0
+gdpval,e0b-b2-gdpval-p1,1,{},0,0,0
+gdpval,e0b-b2-gdpval-p2,1,{},0,0,0
+gdpval,e0b-b2-gdpval-p3,1,{},0,0,0
+gdpval,e0b-b2-gdpval-p4,1,{},0,0,0
+gdpval,e0b-b2-gdpval-p5,0,{},0,0,0
 claw_eval,e0b-b1-claw_eval-p1,0,{},0,0,0
 claw_eval,e0b-b1-claw_eval-p2,0,{},0,0,0
 claw_eval,e0b-b1-claw_eval-p1-ref,0,{},0,0,0
 claw_eval,e0b-b1-claw_eval-p2-ref,0,{},0,0,0
+claw_eval,e0b-b2-claw_eval-p1,0,{},0,0,0
+claw_eval,e0b-b2-claw_eval-p2,0,{},0,0,0
+claw_eval,e0b-b2-claw_eval-p3,0,{},0,0,0
+claw_eval,e0b-b2-claw_eval-p4,0,{},0,0,0
+claw_eval,e0b-b2-claw_eval-p5,0,{},0,0,0
+claw_eval,e0b-b2-claw_eval-p6,0,{},0,0,0
+claw_eval,e0b-b2-claw_eval-p7,0,{},0,0,0
+claw_eval,e0b-b2-claw_eval-p8,0,{},0,0,0

@@ -1,0 +1,5 @@
+source,rollouts,failed_rollouts,failed_tasks,genuine_references,replayable,validated_positive,validated_negative,unresolved,unreplayable,clusters,clusters_ge2,feasible_where_near,feasible_where_far,feasible_why,feasible_how,feasible_shuffled,feasible_coherent_wrong
+browsecomp,20,6,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+hle,64,33,21,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+gdpval,112,17,13,11,11,1,7,1,2,3,1,3,3,2,2,2,3
+claw_eval,336,60,18,23,40,24,13,3,0,15,6,19,19,19,19,19,19

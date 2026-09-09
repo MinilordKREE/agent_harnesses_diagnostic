@@ -1,0 +1,3 @@
+source,failures,rule_determined_fraction,llm_chosen_fraction,candidate_set_sizes,clusters,clusters_component_unique
+gdpval,4,0.0000,1.0000,"{""3"": 3, ""4"": 1}",3,0
+claw_eval,29,0.0345,0.9655,"{""1"": 1, ""2"": 3, ""3"": 19, ""4"": 6}",15,1

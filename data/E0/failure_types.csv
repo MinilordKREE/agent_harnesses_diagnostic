@@ -7,11 +7,11 @@ hle,deterministic,0
 hle,stochastic,0
 hle,unrepairable,0
 hle,unreplayable,0
-gdpval,deterministic,3
-gdpval,stochastic,2
+gdpval,deterministic,1
+gdpval,stochastic,3
 gdpval,unrepairable,4
 gdpval,unreplayable,2
-claw_eval,deterministic,26
-claw_eval,stochastic,7
-claw_eval,unrepairable,7
+claw_eval,deterministic,24
+claw_eval,stochastic,5
+claw_eval,unrepairable,8
 claw_eval,unreplayable,0
