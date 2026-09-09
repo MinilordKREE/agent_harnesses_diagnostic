@@ -1,0 +1,29 @@
+# Confirmatory run config: refuses to start on a dirty working tree.
+schema_version: 1
+name: example-confirmatory
+kind: confirmatory
+seed: 0
+llm:
+  provider: deepseek
+  model: deepseek-v4-flash
+  base_url: https://api.deepseek.com
+  temperature: 0.0
+  max_tokens: 256
+  thinking: false
+  timeout_s: 120.0
+  cache_dir: .cache/ahd/llm
+judge:
+  model: deepseek-v4-pro     # the measurement instrument: fixed, temperature 0, cached
+  temperature: 0.0
+  max_tokens: 8192
+  timeout_s: 300.0
+  use_cache: true
+  thinking: false
+tasks:
+  dataset_id: RUC-AIBOX/Evo-Bench
+  revision: 46bf7acf5c76250541c44d3794c38bb2e5ecba35
+  split: validation
+  sources: [browsecomp, hle, gdpval, claw_eval]   # apex is loaded but excluded
+  n: null                    # stratified subsample size by source; null = all
+pricing_path: configs/pricing.yaml
+runs_root: runs

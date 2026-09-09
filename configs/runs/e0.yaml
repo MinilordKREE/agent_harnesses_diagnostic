@@ -1,0 +1,49 @@
+# E0 calibration config (experiments/E0/spec.yaml). Confirmatory kind: refuses a dirty tree.
+schema_version: 1
+name: e0
+kind: confirmatory
+seed: 0
+require_clean_tree: true
+llm:
+  provider: deepseek
+  model: deepseek-v4-flash
+  base_url: https://api.deepseek.com
+  temperature: 0.0
+  max_tokens: 256
+  thinking: false
+  timeout_s: 300.0
+  cache_dir: .cache/ahd/llm
+judge:
+  model: deepseek-v4-pro
+  temperature: 0.0
+  max_tokens: 8192
+  timeout_s: 300.0
+  use_cache: true
+  thinking: false
+tasks:
+  dataset_id: RUC-AIBOX/Evo-Bench
+  revision: 46bf7acf5c76250541c44d3794c38bb2e5ecba35
+  split: validation
+  sources: [browsecomp, hle, gdpval, claw_eval]
+  n: null
+policy:
+  model: deepseek-v4-flash
+  temperature: 1.0
+  reasoning_effort: max
+  max_output_tokens: 65536
+  timeout_seconds: 600
+budget:
+  max_steps: 300
+  rollout_wall_clock_seconds: 3600
+  command_timeout_seconds: 120
+  observation_truncate_chars: 12000
+run:
+  mode: normal
+  replicates: 1
+  mock_today: "2026-03-02"
+  reference_max_attempts: 5
+  keep_workspaces: false
+  arm: seed
+  workers: 4
+pricing_path: configs/pricing.yaml
+runs_root: runs/E0

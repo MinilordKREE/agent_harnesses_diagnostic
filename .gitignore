@@ -15,7 +15,7 @@ build/
 .pytest_cache/
 
 # runs
-runs/
+/runs/
 .cache/
 
 # external checkouts (Claw-Eval via scripts/setup_claw_eval.sh)
