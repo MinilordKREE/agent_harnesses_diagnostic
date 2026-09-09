@@ -343,12 +343,20 @@ class E0Context:
 
     # -- spend and the hard cap
     def spend_e0b(self) -> float:
+        """E0b spend: the E0b runs' main ledgers (held-out passes added by E0d-A carry the E0d
+        stage in their manifest and are excluded), judge calibration and preflight."""
         total = 0.0
         paths = [
-            *self.runs_root.glob("e0b-*/ledger.jsonl"),
             self.runs_root / "judge_calibration.ledger.jsonl",
             self.runs_root / "preflight.ledger.jsonl",
         ]
+        for run_dir in self.runs_root.glob("e0b-*"):
+            manifest_path = run_dir / "manifest.json"
+            if not manifest_path.is_file():
+                continue
+            experiment = read_manifest(manifest_path).experiment or {}
+            if experiment.get("stage") != "E0d":
+                paths.append(run_dir / LEDGER_FILENAME)
         for path in paths:
             if path.is_file():
                 total += sum(
