@@ -1,0 +1,11 @@
+source,run_id,cluster_id,decoy_component,decoy_step,step_basis,cause_label,severity,generation_seed,ref_plausibility,coh_plausibility,error
+claw_eval,e0c-b1-claw_eval-p1,c63b3e797,planner,1,not_sufficient,insufficient_evidence,high,3,1,1,
+claw_eval,e0c-b1-claw_eval-p1,cd43b738f,observation_shaping,5,validated_negative,context_loss,high,3,1,4,
+claw_eval,e0c-b1-claw_eval-p1,c95548d17,tool_registry,2,validated_negative,insufficient_evidence,high,3,4,1,
+claw_eval,e0c-b1-claw_eval-p2,c61133d38,middleware,2,validated_negative,over_exploration,high,3,4,1,
+claw_eval,e0c-b1-claw_eval-p2,c1605dd26,tool_router,6,validated_negative,tool_hallucination,high,3,1,1,
+claw_eval,e0c-b1-claw_eval-p2,c33ef13ee,verifier,2,validated_negative,error_recovery,high,3,2,1,
+claw_eval,e0c-b1-claw_eval-p2,c4b6ab060,loop,2,validated_negative,over_exploration,high,3,1,1,
+claw_eval,e0c-b1-claw_eval-p2,c3622ecfc,tool_registry,4,validated_negative,tool_hallucination,high,3,2,4,
+claw_eval,e0c-b1-claw_eval-p3,c695f431f,verifier,5,validated_negative,state_corruption,high,3,2,1,
+claw_eval,e0c-b1-claw_eval-p3,c52391f1d,task_prompt,3,validated_negative,context_loss,high,3,1,4,

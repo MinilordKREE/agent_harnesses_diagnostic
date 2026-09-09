@@ -1,0 +1,2 @@
+source,rounds,final_generation_seed,n,mean_diff_ref_minus_coh,ref_higher,coh_higher,ties,sign_test_p,status
+claw_eval,4,3,10,0.0000,4,3,3,1.000,ok

@@ -1,0 +1,2 @@
+source,failures,rule_determined_fraction,llm_chosen_fraction,candidate_set_sizes,clusters,clusters_component_unique
+claw_eval,38,0.0000,1.0000,"{""2"": 8, ""3"": 25, ""4"": 5}",15,0

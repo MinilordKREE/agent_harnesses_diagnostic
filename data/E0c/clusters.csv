@@ -1,0 +1,2 @@
+source,n_clusters,sizes,singleton_fraction,deterministic_fraction,clusters_with_two
+claw_eval,15,"[6, 5, 5, 5, 3, 3, 2, 2, 1, 1, 1, 1, 1, 1, 1]",0.4667,0.8667,8

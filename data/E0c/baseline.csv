@@ -1,0 +1,4 @@
+source,run_id,tasks,rollouts,rollout_pass_rate,pass_hat_k_rate
+claw_eval,e0c-b1-claw_eval-p1,66,198,0.8434,0.7879
+claw_eval,e0c-b1-claw_eval-p2,66,198,0.8384,0.7576
+claw_eval,e0c-b1-claw_eval-p3,66,198,0.8376,0.7273

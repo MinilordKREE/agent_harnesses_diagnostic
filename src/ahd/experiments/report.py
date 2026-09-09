@@ -1559,7 +1559,10 @@ def build_report(*, spec_path: Path, data_dir: Path, report_path: Path) -> list[
     md.append("## E0a pilot\n\n" + "\n\n".join(pilot_md))
     b_written, b_md, calib, extras = e0b_tables(spec, runs_root, data_dir)
     written.extend(b_written)
-    md.append("## E0b calibration\n\n" + "\n\n".join(b_md))
+    passes_title = (
+        "## E0c mining and held-out passes" if spec.run_prefix == "e0c" else "## E0b calibration"
+    )
+    md.append(passes_title + "\n\n" + "\n\n".join(b_md))
     if spec.E0d or spec.run_prefix != "e0b":
         from ahd.experiments.report_e0d import e0d_tables
 

@@ -1,0 +1,6 @@
+source,split,tasks,agreement,delta_points,ci95_low,ci95_high
+claw_eval,validation,66,0.8889,4.04,0.00,13.64
+claw_eval,validation:p1-p2,66,0.9091,3.03,0.00,10.61
+claw_eval,validation:p1-p3,66,0.8788,6.06,0.00,13.64
+claw_eval,validation:p2-p3,66,0.8788,3.03,0.00,10.61
+claw_eval,heldout,30,0.8333,10.00,0.00,23.33

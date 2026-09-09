@@ -1,0 +1,2 @@
+source,rollouts,failed_rollouts,failed_tasks,genuine_references,replayable,validated_positive,validated_negative,unresolved,unreplayable,clusters,clusters_ge2,feasible_where_near,feasible_where_far,feasible_why,feasible_how,feasible_shuffled,feasible_coherent_wrong
+claw_eval,594,95,21,34,57,29,17,9,2,15,8,24,24,24,24,24,24

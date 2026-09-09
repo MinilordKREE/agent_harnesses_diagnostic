@@ -1,0 +1,4 @@
+source,run_id,failures_reopened,candidates_reopened,failure_type_changed,oracle_step_changed,verdict_transitions,usd
+claw_eval,e0c-b1-claw_eval-p1,11,20,0,0,"{""negative->negative"": 5, ""positive->negative"": 1, ""positive->positive"": 13, ""unresolved->unresolved"": 1}",0.2001
+claw_eval,e0c-b1-claw_eval-p2,10,28,0,0,"{""negative->negative"": 15, ""positive->positive"": 11, ""unresolved->unresolved"": 2}",0.5723
+claw_eval,e0c-b1-claw_eval-p3,10,33,2,3,"{""negative->negative"": 16, ""negative->positive"": 1, ""negative->unresolved"": 1, ""positive->negative"": 1, ""positive->positive"": 11, ""positive->unresolved"": 2, ""unresolved->unresolved"": 1}",1.1300

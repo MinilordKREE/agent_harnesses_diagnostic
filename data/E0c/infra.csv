@@ -1,0 +1,11 @@
+source,run_id,infra_failures,infra_by_kind,usage_mismatch,partial,budget_failures
+claw_eval,e0c-b1-claw_eval-p1,0,{},0,0,0
+claw_eval,e0c-b1-claw_eval-p2,0,{},0,0,0
+claw_eval,e0c-b1-claw_eval-p3,1,"{""ServiceStartError"": 1}",0,1,0
+claw_eval,e0c-b1-claw_eval-p1-ref,0,{},0,0,0
+claw_eval,e0c-b1-claw_eval-p2-ref,0,{},0,0,0
+claw_eval,e0c-b1-claw_eval-p3-ref,0,{},0,0,0
+claw_eval,e0c-b2-claw_eval-p1,0,{},0,0,0
+claw_eval,e0c-b2-claw_eval-p2,0,{},0,0,0
+claw_eval,e0c-b2-claw_eval-p3,0,{},0,0,0
+claw_eval,e0c-b2-claw_eval-p4,0,{},0,0,0

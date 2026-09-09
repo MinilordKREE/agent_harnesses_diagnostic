@@ -1,0 +1,11 @@
+rule,observed,decision
+D1:claw_eval,pass_rate=0.8398 aa_delta=4.04 clusters_with_two=8,enters E2
+D2:claw_eval,primary_clusters=8,8 primary; rest secondary
+D3:browsecomp,missing A/A data,not evaluable
+D3:hle,missing A/A data,not evaluable
+D4,projected_usd(k=3)=4.19 budget=600.0,k=3
+D5:claw_eval,heldout_delta=10.00,45/source
+D6,no judge calibration,not evaluable
+D8:claw_eval,N=7 k=3 passes=1 MDE=7.75 points cost=547.78 USD (delta_meaningful=3.0),no configuration within owner_budget_usd reaches delta_meaningful: best available within the budget; the paper states the exclusion bound 7.75 points
+D1prime2:claw_eval,primary clusters: low=8 max=6 (ties go to max),"E2 under low with N=8; 11 arms, k=3, 2 held-out passes per accepted patch; the paper states the D8 exclusion bound at that N"
+COH-WRONG:claw_eval,parity ok,arm admitted

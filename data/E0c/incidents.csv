@@ -1,0 +1,4 @@
+ts,kind,detail
+2026-09-09T03:51,start,"E0c launched at commit 3940c95 (spec_e0c.yaml, reasoning_effort low, splits_v2 sha 4a1e705c, cap 40 USD on runs/E0c ledgers). D1'' frozen as my reading: E2 under the condition with more E2-primary clusters, ties to max."
+2026-09-09T06:15,restart,machine rebooted about 06:07 UTC (editor disconnect) and killed the runner during held-out pass 1; mining passes 1-3 complete; held-out pass 1 resumes from its done.json markers; relaunched at the same commit 3940c95
+2026-09-09T10:57,restart,"second machine reboot about 10:55 UTC (editor disconnect) killed the runner during the mining pass 1 first-stage replay (5 of 19 failures had verdicts, 98 replay rollouts on disk with markers); relaunched at the same commit 3940c95, replays resume from the markers"

@@ -1,0 +1,5 @@
+source,failure_type,count
+claw_eval,deterministic,29
+claw_eval,stochastic,9
+claw_eval,unrepairable,8
+claw_eval,unreplayable,2

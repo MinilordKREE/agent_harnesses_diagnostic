@@ -1,0 +1,8 @@
+source,failure_type,before_m32,after_m32
+claw_eval,deterministic,31,29
+claw_eval,stochastic,9,9
+claw_eval,unrepairable,8,8
+claw_eval,unreplayable,2,2
+claw_eval,unresolved,7,9
+claw_eval,candidates_confirmed_n>=5,,81
+claw_eval,candidates_unconfirmed_fixed_k,,109
