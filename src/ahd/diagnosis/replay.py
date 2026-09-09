@@ -26,7 +26,7 @@ from __future__ import annotations
 import json
 import re
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Literal
@@ -367,6 +367,12 @@ def is_marginal(candidate: CandidateReplay) -> bool:
     return decide(sub.pass_fraction, ctl.conservative_pass_fraction) == "undecided"
 
 
+def unconfirmed(candidate: CandidateReplay) -> bool:
+    """A scorable candidate whose verdict has not been confirmed at n >= 5 (a fixed-k result,
+    or a truncated schedule): the E0c confirmation predicate."""
+    return candidate.status not in ("skipped", "unreplayable") and not candidate.confirmed
+
+
 def classify(candidates: Sequence[CandidateReplay]) -> FailureType:
     """Owner decisions (M3.1, M3.2): a validated-positive step -> deterministic; an unresolved
     step and no positive one -> unresolved; control passes at every tested step -> stochastic;
@@ -417,7 +423,13 @@ class Replayer:
         resume: bool = False,
         subdir: str = "replay",
         workers: int = 1,
+        schedule: Sequence[int] = SCHEDULE,
     ) -> None:
+        if not schedule or list(schedule) != sorted(set(schedule)) or schedule[0] < 1:
+            raise ValueError(f"replay schedule must be ascending and non-empty: {schedule!r}")
+        self.schedule = tuple(int(n) for n in schedule)
+        """The stages to run; ``(3,)`` stops after the first stage and leaves every verdict
+        unconfirmed (E0c: confirmation only for the clusters that enter E2)."""
         self._runner = runner
         self._spec = spec.model_copy(update={"arm": REPLAY_ARM, "keep_workspaces": True})
         self._studied = studied
@@ -591,7 +603,7 @@ class Replayer:
         verdict: Verdict | None = None
         confirmed = False
         skipped_by_economize = False
-        for n in SCHEDULE:
+        for n in self.schedule:
             if len(substitute) < n:
                 substitute.extend(
                     self._rollouts(
@@ -606,7 +618,7 @@ class Replayer:
                     )
                 )
             sub_res = arm_result("substitute", substitute, n)
-            if n == SCHEDULE[0] and sub_res.unreplayable == n:
+            if n == self.schedule[0] and sub_res.unreplayable == n:
                 ctl_res = (
                     arm_result("control", control, n)
                     if control
@@ -661,7 +673,16 @@ class Replayer:
                 verdict, confirmed = decision, True
                 break
         if verdict is None:
-            verdict, confirmed = "unresolved", True
+            # the schedule ended: at n = 12 an undecided candidate is unresolved for good; a
+            # truncated schedule leaves the last threshold decision in place, unconfirmed
+            last = stages[-1]
+            if last.decision in ("positive", "negative"):
+                verdict = last.decision
+            elif last.decision == "control_skipped":
+                verdict, skipped_by_economize = "negative", True
+            else:
+                verdict = "unresolved"
+            confirmed = last.n >= SCHEDULE[-1] or (last.n >= CONFIRM_N and verdict != "unresolved")
         n_final = stages[-1].n
         sub_res = arm_result("substitute", substitute, n_final)
         ctl_res = (
@@ -740,8 +761,8 @@ class Replayer:
             return CandidateReplay(
                 step=candidate.step,
                 divergence=candidate.divergence,
-                substitute=ArmResult(arm="substitute", k=SCHEDULE[0], skipped=True),
-                control=ArmResult(arm="control", k=SCHEDULE[0], skipped=True),
+                substitute=ArmResult(arm="substitute", k=self.schedule[0], skipped=True),
+                control=ArmResult(arm="control", k=self.schedule[0], skipped=True),
                 status="skipped",
                 usd=0.0,
                 verdict="skipped",
@@ -843,14 +864,14 @@ class Replayer:
             instrument_snapshot_id=self._instrument.snapshot_id,
             instrument_tree_sha256=self._instrument.meta.sha256,
             reference_run=self._reference_run,
-            k=legacy_k if legacy_k is not None else SCHEDULE[0],
+            k=legacy_k if legacy_k is not None else self.schedule[0],
             max_candidates=self.max_candidates,
             economize=self.economize,
             candidates=tuple(results),
             sufficient_set=sufficient_set,
             negative_set=negative_set,
             unresolved_set=unresolved_set,
-            schedule=SCHEDULE,
+            schedule=self.schedule,
             failure_type=failure_type,
             manifestation_step=manifestation,
             oracle_step=oracle_step,
@@ -936,14 +957,16 @@ class Replayer:
         alignment: Alignment,
         recorded_workspace: str | None,
         reference_workspace: str | None = None,
+        reopen: Callable[[CandidateReplay], bool] = is_marginal,
     ) -> ReplayResult:
-        """E0d-B: re-open the marginal candidates of a pre-M3.2 result through the schedule,
-        keeping their existing rollouts; the other candidates keep their (derived, unconfirmed)
-        verdicts. Rewrites ``replay.json`` in place."""
+        """Re-open the candidates selected by ``reopen`` (E0d-B: the marginal fixed-k ones;
+        E0c: every unconfirmed one) through this replayer's schedule, keeping their existing
+        rollouts; the other candidates keep their (derived, unconfirmed) verdicts. Rewrites
+        ``replay.json`` in place."""
         key = existing.failure_key
         drift_reports: dict[str, JsonValue] = dict(existing.drift_reports)
 
-        def reopen(c: CandidateReplay) -> CandidateReplay:
+        def rerun(c: CandidateReplay) -> CandidateReplay:
             candidate = next(x for x in alignment.candidates if x.step == c.step)
             return self._candidate(
                 task,
@@ -958,13 +981,13 @@ class Replayer:
                 existing=c,
             )
 
-        marginal = [c for c in existing.candidates if is_marginal(c)]
+        marginal = [c for c in existing.candidates if reopen(c)]
         reopened: dict[int, CandidateReplay] = {}
         if self.workers == 1 or len(marginal) <= 1:
-            reopened = {c.step: reopen(c) for c in marginal}
+            reopened = {c.step: rerun(c) for c in marginal}
         elif marginal:
             with ThreadPoolExecutor(max_workers=min(self.workers, len(marginal))) as pool:
-                futures = {c.step: pool.submit(reopen, c) for c in marginal}
+                futures = {c.step: pool.submit(rerun, c) for c in marginal}
                 reopened = {step: f.result() for step, f in futures.items()}
         results: list[CandidateReplay] = []
         for c in existing.candidates:

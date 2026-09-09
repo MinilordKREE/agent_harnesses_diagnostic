@@ -1,6 +1,8 @@
 """Frozen task splits for E0b (owner decision P2): per source, ``validation`` (all usable),
 ``eval_dev`` (24 from evaluation, seed 0, per-source stratified) and ``heldout`` (30 from the
 remaining evaluation tasks, seed 0). Pairwise disjoint by construction and asserted.
+``splits_v2`` (E0c) adds ``eval_rest``, the evaluation tasks in neither eval_dev nor heldout;
+validation, eval_dev and heldout are identical to v1 (heldout untouched).
 
 No reference source: written fresh for ahd.
 """
@@ -26,6 +28,8 @@ class SourceSplits(StrictModel):
     validation: tuple[str, ...]
     eval_dev: tuple[str, ...]
     heldout: tuple[str, ...]
+    eval_rest: tuple[str, ...] = ()
+    """v2 (E0c): the usable evaluation tasks outside eval_dev and heldout."""
 
 
 class Splits(StrictModel):
@@ -35,9 +39,30 @@ class Splits(StrictModel):
     heldout_per_source: int
     sources: dict[str, SourceSplits]
 
-    def mining_pool(self, source: str) -> tuple[str, ...]:
+    def mining_pool(self, source: str, *, with_rest: bool = False) -> tuple[str, ...]:
         s = self.sources[source]
-        return tuple(sorted(set(s.validation) | set(s.eval_dev)))
+        ids = set(s.validation) | set(s.eval_dev)
+        if with_rest:
+            ids |= set(s.eval_rest)
+        return tuple(sorted(ids))
+
+
+def with_eval_rest(splits: Splits, evaluation: TaskSet) -> Splits:
+    """The v2 splits: v1 plus ``eval_rest`` per source. validation / eval_dev / heldout are
+    carried over unchanged, so a v2 file never moves a held-out task."""
+    out: dict[str, SourceSplits] = {}
+    for source, s in splits.sources.items():
+        taken = set(s.eval_dev) | set(s.heldout) | set(s.validation)
+        rest = tuple(
+            sorted(
+                t.id
+                for t in evaluation.tasks
+                if t.source_benchmark == source and not t.excluded and t.id not in taken
+            )
+        )
+        assert_disjoint(source, s.validation, s.eval_dev, s.heldout, rest)
+        out[source] = s.model_copy(update={"eval_rest": rest})
+    return splits.model_copy(update={"schema_version": 2, "sources": out})
 
 
 def build_splits(

@@ -9,6 +9,7 @@
     uv run python scripts/e0_run.py E0d            # M3.2 addendum: B C D A (spec order), stops
                                                    # at E0d.hard_cap_usd
     uv run python scripts/e0_run.py E0d --stages B C
+    uv run python scripts/e0_run.py E0c --spec experiments/E0/spec_e0c.yaml   # low effort, cap 40
 
 No reference source: written fresh for ahd.
 """
@@ -21,15 +22,18 @@ import sys
 from pathlib import Path
 
 from ahd.errors import AhdError
-from ahd.experiments.e0 import E0Context, e0b, e0d, pilot, preflight
+from ahd.experiments.e0 import E0Context, e0b, e0c, e0d, pilot, preflight
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="e0_run")
-    parser.add_argument("stage", choices=["E0a", "E0b", "E0d"])
+    parser.add_argument("stage", choices=["E0a", "E0b", "E0c", "E0d"])
     parser.add_argument("--spec", type=Path, default=Path("experiments/E0/spec.yaml"))
     parser.add_argument(
-        "--stages", nargs="*", default=None, help="E0b sub-stages: B1 B2 B3-6 B7; E0d: B C D A"
+        "--stages",
+        nargs="*",
+        default=None,
+        help="E0b sub-stages: B1 B2 B3-6 B7; E0c: B1 B2 B3-6 CONFIRM C; E0d: B C D A",
     )
     parser.add_argument(
         "--preflight",
@@ -50,6 +54,8 @@ def main(argv: list[str] | None = None) -> int:
                 return 4
         elif args.stage == "E0d":
             e0d(ctx, stages=tuple(args.stages) if args.stages else None)
+        elif args.stage == "E0c":
+            e0c(ctx, stages=tuple(args.stages) if args.stages else None)
         else:
             e0b(ctx, stages=tuple(args.stages) if args.stages else ("B1", "B2", "B3-6", "B7"))
         print("done; regenerate tables with: uv run python scripts/e0_report.py")

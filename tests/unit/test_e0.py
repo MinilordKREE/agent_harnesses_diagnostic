@@ -206,3 +206,43 @@ def test_full_arms_subset_is_deterministic(tmp_path: Path) -> None:
     total = sum(len(v) for v in first.values())
     assert total == 30 and len(first["c"]) == 3  # small sources contribute all their failures
     assert all(k.count("/") == 2 for keys in first.values() for k in keys)  # failure_key format
+
+
+def test_e0c_spec_and_splits_v2() -> None:
+    from ahd.experiments.splits import SourceSplits, Splits, with_eval_rest
+    from ahd.tasks.models import TaskSet
+
+    spec = load_spec(REPO_ROOT / "experiments" / "E0" / "spec_e0c.yaml")
+    assert spec.policy.get("reasoning_effort") == "low" and spec.run_prefix == "e0c"
+    assert (
+        spec.runs_root == "runs/E0c" and spec.e0c_cap() == 40.0 and spec.sources == ("claw_eval",)
+    )
+    assert spec.splits_path == "experiments/splits_v2.json" and spec.hard_cap_usd is None
+    assert set(spec.decision_rules) == {"D1", "D2", "D4", "D5", "D8", "D1prime2"}
+    assert spec.e0d_block("F_mde")["N"] == [7, 8, 10, 14]  # addendum blocks fall back to E0c
+    assert spec.e0c_block("replay")["first_stage"] == 3 and spec.corruption_seed() == 0
+    config = load_run_config(REPO_ROOT / "configs" / "runs" / "e0c.yaml")
+    _check_spec_matches_config(spec, config)
+
+    v1 = Splits(
+        seed=0,
+        eval_dev_per_source=1,
+        heldout_per_source=1,
+        sources={"x": SourceSplits(validation=("v1",), eval_dev=("e1",), heldout=("h1",))},
+    )
+    wide = TaskSet.model_validate(
+        {
+            "dataset_id": "d",
+            "revision": "r",
+            "split": "evaluation",
+            "suite_name": "s",
+            "tasks": [],
+        }
+    )
+    empty = with_eval_rest(v1, wide)
+    assert empty.schema_version == 2 and empty.sources["x"].eval_rest == ()
+    assert empty.mining_pool("x") == ("e1", "v1") and empty.mining_pool("x", with_rest=True) == (
+        "e1",
+        "v1",
+    )
+    assert empty.sources["x"].heldout == ("h1",)  # heldout untouched

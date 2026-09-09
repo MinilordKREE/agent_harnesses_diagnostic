@@ -636,13 +636,18 @@ def _bootstrap_delta(
     return deltas[int(0.025 * n)], deltas[min(n - 1, int(0.975 * n))]
 
 
+RUN_PREFIX = "e0b"
+"""Run-id prefix of the report being built (``e0b`` for E0; ``e0c`` under runs/E0c); set by
+``build_report`` from the spec."""
+
+
 def seed_runs(runs_root: Path, block: str, source: str) -> list[Path]:
     """Finished seed passes of a block, in pass order (never the ``-ref`` reference runs)."""
-    return pass_runs(runs_root, block, source)
+    return pass_runs(runs_root, block, source, prefix=RUN_PREFIX)
 
 
 def reference_runs(runs_root: Path, block: str, source: str) -> list[Path]:
-    return pass_runs(runs_root, block, source, reference=True)
+    return pass_runs(runs_root, block, source, reference=True, prefix=RUN_PREFIX)
 
 
 ARM_ORDER: tuple[str, ...] = (
@@ -787,25 +792,56 @@ def e0b_tables(
         aa_delta = None
         ci = None
         if len(dirs) >= 2:
-            p1, p2 = _task_pass_hat(dirs[0]), _task_pass_hat(dirs[1])
-            common = sorted(set(p1) & set(p2))
-            a = [p1[t] for t in common]
-            b = [p2[t] for t in common]
-            if common:
-                aa_delta = abs(statistics.fmean(a) - statistics.fmean(b)) * 100
-                ci = _bootstrap_delta(a, b)
-                agreement = sum(1 for x, y in zip(a, b, strict=True) if x == y) / len(common)
-                aa_rows.append(
-                    [
-                        source,
-                        "validation",
-                        len(common),
-                        _num(agreement),
-                        _num(aa_delta, 2),
-                        _num(ci[0], 2),
-                        _num(ci[1], 2),
-                    ]
-                )
+            # every pair of passes; with two passes this is the single E0b row, with more the
+            # per-pair rows are listed and the summary row carries the mean delta and CI
+            pair_deltas: list[float] = []
+            pair_rows: list[list[object]] = []
+            for i in range(len(dirs)):
+                for j in range(i + 1, len(dirs)):
+                    p1, p2 = _task_pass_hat(dirs[i]), _task_pass_hat(dirs[j])
+                    common = sorted(set(p1) & set(p2))
+                    if not common:
+                        continue
+                    a = [p1[t] for t in common]
+                    b = [p2[t] for t in common]
+                    delta = abs(statistics.fmean(a) - statistics.fmean(b)) * 100
+                    pair_ci = _bootstrap_delta(a, b)
+                    agreement = sum(1 for x, y in zip(a, b, strict=True) if x == y) / len(common)
+                    pair_deltas.append(delta)
+                    pair_rows.append(
+                        [
+                            source,
+                            f"validation:p{i + 1}-p{j + 1}",
+                            len(common),
+                            _num(agreement),
+                            _num(delta, 2),
+                            _num(pair_ci[0], 2),
+                            _num(pair_ci[1], 2),
+                        ]
+                    )
+                    if len(dirs) == 2:
+                        pair_rows[-1][1] = "validation"
+                        ci = pair_ci
+            if pair_deltas:
+                aa_delta = statistics.fmean(pair_deltas)
+                if len(dirs) > 2:
+                    lows = [float(str(r[5])) for r in pair_rows]
+                    highs = [float(str(r[6])) for r in pair_rows]
+                    ci = (min(lows), max(highs))
+                    tasks_n = pair_rows[0][2]
+                    agreements = [float(str(r[3])) for r in pair_rows]
+                    aa_rows.append(
+                        [
+                            source,
+                            "validation",
+                            tasks_n,
+                            _num(statistics.fmean(agreements)),
+                            _num(aa_delta, 2),
+                            _num(ci[0], 2),
+                            _num(ci[1], 2),
+                        ]
+                    )
+                aa_rows.extend(pair_rows)
         held_delta = None
         hdirs = [d for d in b2[source] if (d / "summary.json").is_file()]
         if len(hdirs) >= 2:
@@ -1423,6 +1459,37 @@ def decisions(
                     ),
                 ]
             )
+    if "D1prime2" in spec.decision_rules:
+        comparison = spec.e0c_block("comparison")
+        other_condition = str(comparison.get("condition", "max"))
+        this_condition = str(spec.policy.get("reasoning_effort"))
+        other_n = _primary_from_decisions(Path(str(comparison.get("decisions_csv", ""))))
+        for source in spec.sources:
+            c = calib.get(source)
+            if c is None:
+                rows.append([f"D1prime2:{source}", "no runs", "not evaluable"])
+                continue
+            other = other_n.get(source)
+            if other is None:
+                rows.append(
+                    [
+                        f"D1prime2:{source}",
+                        f"{this_condition}={c.primary_clusters} {other_condition}=unknown",
+                        "not evaluable: comparison decisions.csv missing",
+                    ]
+                )
+                continue
+            chosen = this_condition if c.primary_clusters > other else other_condition
+            n_chosen = c.primary_clusters if chosen == this_condition else other
+            rows.append(
+                [
+                    f"D1prime2:{source}",
+                    f"primary clusters: {this_condition}={c.primary_clusters} "
+                    f"{other_condition}={other} (ties go to {other_condition})",
+                    f"E2 under {chosen} with N={n_chosen}; 11 arms, k=3, 2 held-out passes per "
+                    "accepted patch; the paper states the D8 exclusion bound at that N",
+                ]
+            )
         for source, ok in sorted((extras.get("parity_ok") or {}).items()):
             rows.append(
                 [
@@ -1438,11 +1505,30 @@ def decisions(
     return rows
 
 
+def _primary_from_decisions(path: Path) -> dict[str, int]:
+    """``primary_clusters=<n>`` per source from another report's decisions.csv (D2 rows)."""
+    out: dict[str, int] = {}
+    if not path.is_file():
+        return out
+    with path.open(encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            rule = row.get("rule", "")
+            if rule.startswith("D2:"):
+                observed = row.get("observed", "")
+                if "primary_clusters=" in observed:
+                    out[rule.split(":", 1)[1]] = int(
+                        observed.split("primary_clusters=")[1].split()[0]
+                    )
+    return out
+
+
 # ---------------------------------------------------------------- entry point
 
 
 def build_report(*, spec_path: Path, data_dir: Path, report_path: Path) -> list[Path]:
+    global RUN_PREFIX
     spec = load_spec(spec_path)
+    RUN_PREFIX = spec.run_prefix
     runs_root = Path(spec.runs_root)
     data_dir.mkdir(parents=True, exist_ok=True)
     report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1474,15 +1560,23 @@ def build_report(*, spec_path: Path, data_dir: Path, report_path: Path) -> list[
     b_written, b_md, calib, extras = e0b_tables(spec, runs_root, data_dir)
     written.extend(b_written)
     md.append("## E0b calibration\n\n" + "\n\n".join(b_md))
-    if spec.E0d:
+    if spec.E0d or spec.run_prefix != "e0b":
         from ahd.experiments.report_e0d import e0d_tables
 
         manifest_path = Path("configs/harness/seed_components.yaml")
         components = ComponentManifest.load(manifest_path)
-        d_written, d_md, d_extras = e0d_tables(spec, runs_root, data_dir, manifest=components)
+        observed_n = {s: c.primary_clusters for s, c in calib.items() if c.primary_clusters}
+        d_written, d_md, d_extras = e0d_tables(
+            spec, runs_root, data_dir, manifest=components, observed_n=observed_n
+        )
         written.extend(d_written)
         extras.update(d_extras)
-        md.append("## E0d calibration addendum (M3.2)\n\n" + "\n\n".join(d_md))
+        title = (
+            "## E0c calibration (low effort)"
+            if spec.run_prefix == "e0c"
+            else "## E0d calibration addendum (M3.2)"
+        )
+        md.append(title + "\n\n" + "\n\n".join(d_md))
     cost_path = data_dir / "cost.csv"
     cost_per_rollout: float | None = None
     if cost_path.is_file():

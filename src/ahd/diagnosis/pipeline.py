@@ -28,7 +28,7 @@ import json
 import logging
 import shutil
 import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Literal
@@ -57,7 +57,14 @@ from ahd.diagnosis.genuineness import GenuinenessRecord, verify
 from ahd.diagnosis.leakage import LeakageReport, probe
 from ahd.diagnosis.llm import DiagnosisLLM
 from ahd.diagnosis.probe import ProbeRecord, ProbeReport, one_line, probe_one
-from ahd.diagnosis.replay import Replayer, ReplayResult, is_marginal, verdict_of
+from ahd.diagnosis.replay import (
+    SCHEDULE,
+    CandidateReplay,
+    Replayer,
+    ReplayResult,
+    is_marginal,
+    verdict_of,
+)
 from ahd.diagnosis.schema import (
     CauseVocabulary,
     Diagnosis,
@@ -307,9 +314,13 @@ def replay_failures(
     subdir: str = "replay",
     workers: int = 1,
     before_each: Callable[[], None] | None = None,
+    schedule: Sequence[int] = SCHEDULE,
+    priority: Callable[[AlignmentRecord], float] | None = None,
 ) -> list[ReplayResult]:
     """``subdir`` = ``replay`` writes ``replays.json`` / ``failure_types.json``; any other
-    name (E0's ``replay_full``) writes ``replays_<subdir>.json`` and leaves the main files."""
+    name (E0's ``replay_full``) writes ``replays_<subdir>.json`` and leaves the main files.
+    ``schedule`` is the adaptive schedule to run (``(3,)`` = first stage only, E0c);
+    ``priority`` orders the failures (highest first) so a budget cap cuts the least valuable."""
     replayer = Replayer(
         runner=runner,
         spec=spec,
@@ -323,9 +334,13 @@ def replay_failures(
         resume=resume,
         subdir=subdir,
         workers=workers,
+        schedule=schedule,
     )
     results: list[ReplayResult] = []
-    for record in load_alignments(run_dir):
+    records = load_alignments(run_dir)
+    if priority is not None:
+        records = sorted(records, key=lambda r: -priority(r))
+    for record in records:
         if record.skipped or (
             only and record.failure_key not in only and record.task_id not in only
         ):
@@ -421,16 +436,21 @@ def escalate_replays(
     economize: bool,
     workers: int = 1,
     before_each: Callable[[], None] | None = None,
+    reopen_by_key: Mapping[str, Callable[[CandidateReplay], bool]] | None = None,
+    backup_suffix: str = "pre_m32",
 ) -> list[EscalationRow]:
-    """E0d-B (M3.2): re-open every marginal fixed-k candidate of ``replays.json`` through the
-    adaptive schedule, keeping the rollouts already run. The pre-escalation files are kept as
-    ``replays.pre_m32.json`` / ``failure_types.pre_m32.json``; ``replays.json`` is rewritten
-    after every failure so an interrupted escalation resumes."""
+    """Re-open replay candidates through the full adaptive schedule, keeping the rollouts
+    already run. Default (E0d-B, M3.2): every marginal fixed-k candidate of every failure,
+    each failure once. With ``reopen_by_key`` (E0c): only the listed failures, each with its
+    own predicate (e.g. ``unconfirmed``), and a failure may be re-opened again in a later round.
+    The pre-escalation files are kept as ``replays.<suffix>.json`` and
+    ``failure_types.<suffix>.json``; ``replays.json`` is rewritten after every failure so an
+    interrupted escalation resumes."""
     out = diagnosis_dir(run_dir)
-    if not (out / "replays.pre_m32.json").is_file():
-        shutil.copyfile(out / "replays.json", out / "replays.pre_m32.json")
+    if not (out / f"replays.{backup_suffix}.json").is_file():
+        shutil.copyfile(out / "replays.json", out / f"replays.{backup_suffix}.json")
         if (out / "failure_types.json").is_file():
-            shutil.copyfile(out / "failure_types.json", out / "failure_types.pre_m32.json")
+            shutil.copyfile(out / "failure_types.json", out / f"failure_types.{backup_suffix}.json")
     results = load_replays(run_dir)
     replayer = Replayer(
         runner=runner,
@@ -448,7 +468,7 @@ def escalate_replays(
     log_path = out / "replay_escalation.json"
     if log_path.is_file():
         rows = _load_list(log_path, EscalationRow, what="replay_escalation.json")
-    done = {r.failure_key for r in rows}
+    done = {r.failure_key for r in rows} if reopen_by_key is None else set()
     alignments = load_alignments(run_dir)
 
     def ordered_results() -> list[ReplayResult]:
@@ -460,8 +480,12 @@ def escalate_replays(
 
     lock = threading.Lock()
 
+    def predicate_for(key: str) -> Callable[[CandidateReplay], bool]:
+        return reopen_by_key[key] if reopen_by_key is not None else is_marginal
+
     def escalate_one(record: AlignmentRecord, existing: ReplayResult) -> None:
-        marginal = [c for c in existing.candidates if is_marginal(c)]
+        reopen = predicate_for(existing.failure_key)
+        marginal = [c for c in existing.candidates if reopen(c)]
         task = taskset.by_id(record.task_id)
         failed, failed_dir = _failed_trajectory(run_dir, record)
         reference_dir = rollout_dir(
@@ -475,6 +499,7 @@ def escalate_replays(
             alignment=record.alignment,
             recorded_workspace=_recorded_workspace(failed_dir),
             reference_workspace=_recorded_workspace(reference_dir),
+            reopen=reopen,
         )
         after = {c.step: c for c in updated.candidates}
         row = EscalationRow(
@@ -517,7 +542,11 @@ def escalate_replays(
     for record in alignments:
         key = safe_key(record.task_id, record.replicate, record.attempt)
         existing = results.get(key)
-        if existing is None or key in done or not any(is_marginal(c) for c in existing.candidates):
+        if existing is None or key in done:
+            continue
+        if reopen_by_key is not None and key not in reopen_by_key:
+            continue
+        if not any(predicate_for(key)(c) for c in existing.candidates):
             continue
         pending.append((record, existing))
     if workers <= 1 or len(pending) <= 1:

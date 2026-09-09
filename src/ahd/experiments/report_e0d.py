@@ -142,7 +142,9 @@ def replay_escalation(
         unconfirmed = 0
         for d in base.seed_runs(runs_root, "b1", source):
             out = d / "diagnosis"
-            before = _load(out / "replays.pre_m32.json", ReplayResult)
+            before = _load(out / "replays.pre_m32.json", ReplayResult) or _load(
+                out / "replays.pre_confirm.json", ReplayResult
+            )
             after = _load(out / "replays.json", ReplayResult)
             if not after:
                 continue
@@ -707,10 +709,15 @@ def _cost_inputs(spec: E0Spec, runs_root: Path) -> dict[str, tuple[float | None,
 
 
 def mde_table(
-    spec: E0Spec, runs_root: Path, data_dir: Path, sigma: dict[str, float]
+    spec: E0Spec,
+    runs_root: Path,
+    data_dir: Path,
+    sigma: dict[str, float],
+    *,
+    observed_n: dict[str, int] | None = None,
 ) -> tuple[list[Path], list[str], dict[str, Any]]:
     block = spec.e0d_block("F_mde")
-    ns = [int(x) for x in block.get("N", [7, 8, 10, 14])]
+    base_ns = [int(x) for x in block.get("N", [7, 8, 10, 14])]
     ks = [int(x) for x in block.get("k", [3, 5])]
     passes_list = [int(x) for x in block.get("heldout_passes", [1, 2])]
     sims = int(block.get("sims", 1000))
@@ -726,6 +733,8 @@ def mde_table(
         spread = max(sigma_seed, 5.0)
         pass_usd, call_usd = costs.get(source, (None, None))
         candidates: list[tuple[float, float | None, int, int, int]] = []
+        extra = [observed_n[source]] if observed_n and source in observed_n else []
+        ns = sorted({*base_ns, *extra})
         for n in ns:
             for k in ks:
                 for passes in passes_list:
@@ -755,6 +764,7 @@ def mde_table(
                             base._num(value, 2),
                             base._num(cost, 2),
                             int(value is not None and value <= meaningful),
+                            int(bool(observed_n) and (observed_n or {}).get(source) == n),
                         ]
                     )
                     if value is not None:
@@ -806,6 +816,7 @@ def mde_table(
                 "mde_points",
                 "cost_usd",
                 "meets_d8",
+                "observed_n",
             ],
             rows,
         )
@@ -816,7 +827,8 @@ def mde_table(
         f"Cost model: {arms} arms x N x k x (proposal call + passes x held-out pass); "
         "inputs from the E0b ledgers.\n\n"
         + base._md_table(
-            ["source", "N", "k", "passes", "sigma", "spread", "MDE", "cost", "<=3"], rows
+            ["source", "N", "k", "passes", "sigma", "spread", "MDE", "cost", "<=3", "obs N"],
+            rows,
         )
     ]
     return written, md, decision
@@ -913,16 +925,28 @@ def funnel(spec: E0Spec, runs_root: Path, data_dir: Path) -> tuple[list[Path], l
 
 
 def e0d_tables(
-    spec: E0Spec, runs_root: Path, data_dir: Path, *, manifest: Any
+    spec: E0Spec,
+    runs_root: Path,
+    data_dir: Path,
+    *,
+    manifest: Any,
+    observed_n: dict[str, int] | None = None,
 ) -> tuple[list[Path], list[str], dict[str, Any]]:
     written: list[Path] = []
     md: list[str] = []
     extras: dict[str, Any] = {}
-    status = spec.E0c.get("status", "unknown")
-    md.append(
-        f"E0c (reasoning_effort low) status: **{status}** ({spec.E0c.get('note', '')}). "
-        f"E0d spend cap {spec.e0d_cap()} USD; stage order {list(spec.e0d_order())}."
-    )
+    if spec.run_prefix == "e0c":
+        md.append(
+            f"E0c: policy reasoning_effort **{spec.policy.get('reasoning_effort')}**; "
+            f"mining pool {spec.E0c.get('mining_pool')}; splits `{spec.splits_path}`; "
+            f"cap {spec.e0c_cap()} USD; replay {spec.e0c_block('replay')}."
+        )
+    else:
+        status = spec.E0c.get("status", "unknown")
+        md.append(
+            f"E0c (reasoning_effort low) status: **{status}** ({spec.E0c.get('note', '')}). "
+            f"E0d spend cap {spec.e0d_cap()} USD; stage order {list(spec.e0d_order())}."
+        )
     w, m, sigma = seed_noise(spec, runs_root, data_dir)
     written += w
     md += m
@@ -942,7 +966,9 @@ def e0d_tables(
     w, m = decoy_exclusion(spec, runs_root, data_dir, manifest=manifest)
     written += w
     md += m
-    w, m, extras["mde_decision"] = mde_table(spec, runs_root, data_dir, sigma)
+    w, m, extras["mde_decision"] = mde_table(
+        spec, runs_root, data_dir, sigma, observed_n=observed_n
+    )
     written += w
     md += m
     w, m = funnel(spec, runs_root, data_dir)

@@ -1,0 +1,138 @@
+# EXPERIMENT E0c - calibration under the D1' pivot (i): policy reasoning_effort low. Frozen
+# before running (owner, 2026-09-09: "E0c (minimal), the last calibration step; everything after
+# this is E2"). Numbers are filled into data/E0c/ and docs/experiments/E0C_REPORT.md by
+# scripts/e0_report.py --spec experiments/E0/spec_e0c.yaml.
+schema_version: 1
+experiment: E0
+role: calibration
+policy:
+  model: deepseek-v4-flash
+  temperature: 1.0
+  reasoning_effort: low   # the pivot
+judge:
+  model: deepseek-v4-pro
+  temperature: 0.0
+  cached: true            # retry salt as in M3.1
+judges:                   # P1: judge model per source; recorded in every manifest
+  primary:
+    browsecomp: deepseek-v4-pro
+    hle: deepseek-v4-pro
+    gdpval: deepseek-v4-pro          # text-only; primary for E0b tables
+    claw_eval: deepseek-v4-pro
+  secondary:
+    gdpval: deepseek-v4-flash-vision-exp   # multimodal (page images + extracted text), temp 0, cached
+mock_today: "2026-03-02"
+replay:
+  k: 3
+  max_candidates: 5
+  economize: true
+reference_max_attempts: 5
+workers: 4                # default; E0b overrides per source below
+config: configs/runs/e0c.yaml
+runs_root: runs/E0c
+run_prefix: e0c
+splits_path: experiments/splits_v2.json   # v1 + eval_rest; validation, eval_dev, heldout untouched
+owner_budget_usd: 600.0   # D4 (owner: "suggested 600")
+hard_cap_usd: null        # E0c's cap lives in the E0c block
+sources: [claw_eval]
+E0a:
+  per_source: 5           # stratified sample from validation, seed 0 -> 20 tasks
+  seed: 0
+  replicates: benchmark   # 1 replicate; Claw's 3 trials as the benchmark defines
+  diagnosis_on_failures: [reference, genuineness, alignment, replay, signal, leakage]
+E0b:
+  preflight:
+    P1_gdpval_judge: {pilot_libreoffice_version: "7.3.7.2", pilot_image_grading_attempted: true, vision_probe: one multimodal call at temperature 0}
+    P2_splits: {file: experiments/splits_v1.json, eval_dev_per_source: 24, heldout_per_source: 30, seed: 0, disjoint: true}
+  workers_by_source: {claw_eval: 8, gdpval: 8, hle: 8, browsecomp: 4}
+  scope:
+    claw_eval: {B1: mining_pool, B2: heldout, diagnosis: true, passes: 2}
+    gdpval:    {B1: mining_pool, B2: heldout, diagnosis: true, passes: 2, secondary_judge: deepseek-v4-flash-vision-exp}
+    hle:       {B1: validation, B2: none, diagnosis: false, passes: 2, note: "no oracle (references are shortcuts); recorded as such"}
+    browsecomp: {B1: validation_sample, B1_n: 10, B1_seed: 0, B2: none, diagnosis: false, passes: 2}
+  B3_failure_mining: every failed rollout of B1 (claw_eval, gdpval)
+  B4_references: {max_attempts: 5, genuineness: true}
+  B5_replay: {k: 3, max_candidates: 5, economize: true, full_arms_subset: {n: 30, seed: 0, stratified_by: source, or_all_if_fewer: true}}
+  B6_clusters: {vocabulary: configs/prompts/diagnosis/causes.yaml, corruption_seed: 0, leakage: true}
+  B7_judge_calibration: {n_artifacts: 50, pooled_from: [claw_eval, gdpval], self_consistency: cache_bypass_per_judge, text_vs_vision: gdpval, released_labels: report_if_any}
+  B8_render: {clusters_per_source: 3, arms: [reference, system, corrupt_where_near, corrupt_where_far, corrupt_why, corrupt_how, shuffled]}
+E0c:                      # minimal (owner 2026-09-09); the last calibration step
+  status: running
+  condition: low
+  source: claw_eval
+  mining_pool: [validation, eval_dev, eval_rest]   # splits_v2; heldout untouched
+  mining_passes: 3
+  heldout_passes: 4
+  hard_cap_usd: 40.0      # every ledger under runs/E0c
+  order: [B1, B2, B3-6, CONFIRM, C]
+  replay:
+    first_stage: 3        # every failure gets the first stage only (n = 3, unconfirmed verdicts)
+    confirm: "oracle steps and corruption-placement steps confirmed at n >= 5 ONLY for clusters entering E2: per merged (cause, component) key with >= min_members members, the per-run representative's unconfirmed candidates and each other member's oracle-step candidate; rounds repeat while a confirmation changes the clusters"
+    max_confirm_rounds: 3
+    priority: "failures of tasks with the most failing rollouts across the mining passes first, so the cap cuts singletons"
+  C_coherent_wrong:
+    min_members: 2
+    parity: {mean_tolerance: 0.3, sign_test_alpha: 0.10, scope: source}
+    max_regenerations: 3
+    judge: {model: deepseek-v4-pro, temperature: 0.0, cached: true}
+  F_mde:
+    N: [7, 8, 10, 14]     # plus the observed N (primary clusters of this condition)
+    k: [3, 5]
+    heldout_passes: [1, 2]
+    alpha: 0.05
+    power: 0.8
+    sims: 1000
+    seed: 0
+    spread: "max(sigma_seed, 0.05)"
+  comparison: {condition: max, decisions_csv: data/E0/decisions.csv}   # D1'' compares against E0b/E0d (max)
+  E2: {arms: 11, k: 3, heldout_passes_per_accepted_patch: 2, condition: "chosen by D1''"}
+  corruption_seed: 0
+E0d: {}
+
+decision_rules:
+  D1: 'Source enters E2 iff: seed pass rate on the mining pool (validation U eval_dev) in [0.10, 0.90]
+    (headroom both ways) AND per-source A/A |delta| <= 5 points AND >= 6 clusters with >= 2 members. (Amended:
+    computed on the mining pool, not validation alone.)
+
+    '
+  D2: 'A cluster is E2-primary iff >= 2 members, >= 1 genuine reference, oracle step validated (deterministic)
+    or manifestation-based (stochastic), and near+far+why+how+all all feasible. Singletons and clusters
+    failing any condition form the secondary pool.
+
+    '
+  D4: 'Replicates in E2: k=3 if projected E2 cost (from cost.csv, 8 arms x N primary clusters x k) <=
+    owner budget entered in spec.yaml before running; else k=2; N is all primary clusters, never topped
+    up.
+
+    '
+  D5: 'Held-out size: 30/source unless the A/A band on held-out exceeds 5 points, in which case 45/source
+    (re-sampled from the same frozen seed, superset).
+
+    '
+  D8: 'delta_meaningful = 3 points. E2 uses the cheapest (N, k, passes) configuration with MDE <= 3 if
+    one exists within owner_budget_usd; otherwise the best available configuration, and the paper states
+    the exclusion bound (the smallest effect the design would have detected) rather than a null.
+
+    '
+  D1prime2: 'E2 runs under the condition (max from E0b/E0d, low from E0c) with the larger number of E2-primary
+    clusters (D2, confirmed at n >= 5); ties go to max (the paper policy). E2 starts regardless of D1''
+    (owner: everything after E0c is E2) with 11 arms, k = 3 and 2 held-out passes per accepted patch;
+    the paper states the D8 exclusion bound at the observed N. (My reading of "D1'''' decision"; frozen
+    before running.)
+
+    '
+thresholds:
+  pass_rate_min: 0.1
+  pass_rate_max: 0.9
+  aa_band_max_points: 5.0
+  min_clusters_with_two: 6
+  min_total_primary_clusters: 8
+  search_band_ratio_max: 2.0
+  heldout_per_source: 30
+  heldout_per_source_wide: 45
+  judge_self_consistency_min: 0.9
+  judge_cross_agreement_min: 0.8
+  vision_disagreement_min: 0.1
+  e2_arms: 8
+  e2_arms_m32: 11
+  delta_meaningful_points: 3.0

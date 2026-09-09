@@ -16,7 +16,7 @@ import logging
 import random
 import re
 import shutil
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -37,6 +37,8 @@ from ahd.diagnosis.coherent import PlausibilityScore, parity
 from ahd.diagnosis.llm import DiagnosisLLM, DiagnosisModelConfig
 from ahd.diagnosis.pipeline import (
     PROBE_ARMS,
+    AlignmentRecord,
+    EscalationRow,
     align_failures,
     cluster_run,
     coherent_round,
@@ -47,16 +49,27 @@ from ahd.diagnosis.pipeline import (
     instrument_snapshot,
     leakage_run,
     load_alignments,
+    load_clusters,
     load_coherent_set,
+    load_replays,
     probe_run,
     replay_failures,
+    safe_key,
     signal_failures,
     verify_references,
 )
+from ahd.diagnosis.replay import SCHEDULE, CandidateReplay, unconfirmed
 from ahd.diagnosis.schema import load_causes
 from ahd.diagnosis.signal import load_prompts
 from ahd.errors import BudgetExhausted, ConfigError, InfraError
-from ahd.experiments.splits import SPLITS_PATH, Splits, build_splits, freeze, load_splits
+from ahd.experiments.splits import (
+    SPLITS_PATH,
+    Splits,
+    build_splits,
+    freeze,
+    load_splits,
+    with_eval_rest,
+)
 from ahd.harness.components import ComponentManifest
 from ahd.harness.snapshot import HarnessSnapshot, SnapshotStore, snapshot_from_dir
 from ahd.llm.cache import ResponseCache
@@ -82,7 +95,7 @@ SEED_HARNESS = Path("third_party/evo-bench/policy_harness_seed")
 COMPONENTS_YAML = Path("configs/harness/seed_components.yaml")
 CLAW_REPO_DEFAULT = Path("external/claw-eval")
 VISION_JUDGE_ARM = "judge_vision"
-type Stage = Literal["E0a", "E0b", "E0d"]
+type Stage = Literal["E0a", "E0b", "E0c", "E0d"]
 
 # a 1x1 white PNG for the vision probe (no benchmark data leaves the machine)
 _PROBE_PNG = base64.b64decode(
@@ -130,19 +143,38 @@ class E0Spec(StrictModel):
     E0a: PilotSpec
     E0b: dict[str, JsonValue]
     E0c: dict[str, JsonValue] = {}
-    """The D1' pivot (i) condition; ``status`` records whether it ran before E0d."""
+    """The D1' pivot (i) condition (policy reasoning_effort low). In spec.yaml ``status``
+    records whether it ran before E0d; in spec_e0c.yaml it is the E0c plan itself."""
     E0d: dict[str, JsonValue] = {}
     """The M3.2 calibration addendum (oracle validity, corruption validity, power)."""
     decision_rules: dict[str, str]
     thresholds: dict[str, float]
+    run_prefix: str = "e0b"
+    """Run ids are ``<prefix>-b1-<source>-p<n>`` (mining passes), ``<prefix>-b2-...`` (held-out
+    passes) and ``<run>-ref``; E0c uses ``e0c`` under its own runs_root."""
+    splits_path: str = str(SPLITS_PATH)
 
     def block(self, name: str) -> dict[str, Any]:
         value = self.E0b.get(name)
         return dict(value) if isinstance(value, dict) else {}
 
     def e0d_block(self, name: str) -> dict[str, Any]:
+        """An addendum block: from E0d, else from E0c (the E0c spec carries the F_mde and
+        coherent-wrong settings under its own block)."""
         value = self.E0d.get(name)
+        if not isinstance(value, dict):
+            value = self.E0c.get(name)
         return dict(value) if isinstance(value, dict) else {}
+
+    def e0c_block(self, name: str) -> dict[str, Any]:
+        value = self.E0c.get(name)
+        return dict(value) if isinstance(value, dict) else {}
+
+    def e0c_cap(self) -> float | None:
+        value = self.E0c.get("hard_cap_usd")
+        return (
+            float(value) if isinstance(value, int | float) and not isinstance(value, bool) else None
+        )
 
     def e0d_cap(self) -> float | None:
         value = self.E0d.get("hard_cap_usd")
@@ -155,7 +187,10 @@ class E0Spec(StrictModel):
         return tuple(str(x) for x in value) if isinstance(value, list) else ("B", "C", "D", "A")
 
     def corruption_seed(self) -> int:
-        value = self.E0d.get("corruption_seed", self.block("B6_clusters").get("corruption_seed", 0))
+        value = self.E0d.get(
+            "corruption_seed",
+            self.E0c.get("corruption_seed", self.block("B6_clusters").get("corruption_seed", 0)),
+        )
         return int(value) if isinstance(value, int | float) and not isinstance(value, bool) else 0
 
     def scope(self, source: str) -> dict[str, Any]:
@@ -238,7 +273,10 @@ class E0Context:
         self.components = ComponentManifest.load(COMPONENTS_YAML)
         self.claw_repo = CLAW_REPO_DEFAULT.resolve() if CLAW_REPO_DEFAULT.is_dir() else None
         self._tasksets: dict[str, TaskSet] = {}
-        self.splits_sha256: str | None = sha256_file(SPLITS_PATH) if SPLITS_PATH.is_file() else None
+        self.splits_path = Path(self.spec.splits_path)
+        self.splits_sha256: str | None = (
+            sha256_file(self.splits_path) if self.splits_path.is_file() else None
+        )
         configure_logging(json_path=self.runs_root / "e0.log.jsonl")
 
     # -- tasks
@@ -336,8 +374,8 @@ class E0Context:
             "spec_path": str(self.spec_path),
             "spec_sha256": self.spec_sha256,
         }
-        if stage in ("E0b", "E0d"):
-            block["splits_path"] = str(SPLITS_PATH)
+        if stage in ("E0b", "E0c", "E0d"):
+            block["splits_path"] = str(self.splits_path)
             block["splits_sha256"] = self.splits_sha256
         return block
 
@@ -420,6 +458,30 @@ class E0Context:
                 unit="usd",
             )
 
+    # -- E0c spend: every ledger under its own runs_root
+    def spend_e0c(self) -> float:
+        total = 0.0
+        for path in self.runs_root.rglob("ledger*.jsonl"):
+            total += sum(
+                r.usd for r in read_ledger(path) if r.event in ("call", "policy", "search")
+            )
+        return total
+
+    def guard_e0c(self) -> None:
+        cap = self.spec.e0c_cap()
+        if cap is None:
+            return
+        spent = self.spend_e0c()
+        if spent >= cap:
+            self.log_stage("E0c", "-", "hard_cap_reached", spent_usd=round(spent, 4), cap_usd=cap)
+            raise BudgetExhausted(
+                f"E0c hard cap reached: {spent:.2f} USD >= {cap:.2f} USD; rerun after raising "
+                "E0c.hard_cap_usd in the spec (all finished work is reused)",
+                budget=cap,
+                spent=spent,
+                unit="usd",
+            )
+
     # -- stage log
     def log_stage(self, stage: str, run_id: str, event: str, **extra: JsonValue) -> None:
         row = {
@@ -459,6 +521,8 @@ def run_or_resume(
         return run_dir
     if stage == "E0b":
         ctx.guard()
+    elif stage == "E0c":
+        ctx.guard_e0c()
     elif stage == "E0d":
         ctx.guard_e0d()
     snapshot = ctx.seed_snapshot()
@@ -560,10 +624,14 @@ def diagnose_run(
     taskset: TaskSet,
     full_arms_keys: Sequence[str] = (),
     corruption_seed: int = 0,
+    schedule: Sequence[int] = SCHEDULE,
+    priority: Callable[[AlignmentRecord], float] | None = None,
 ) -> Path | None:
     """Reference run -> genuineness -> alignment -> replay -> signal -> cluster -> corrupt ->
     leakage for one normal run; every step skipped when its output exists. Returns the
-    reference run dir, or None when the run had no harness failure."""
+    reference run dir, or None when the run had no harness failure. ``schedule`` is the
+    replay schedule (E0c: ``(3,)``, confirmation later for the clusters entering E2);
+    ``priority`` orders the failures so a budget cap cuts the least valuable first."""
     failures = task_failures(run_dir)
     if not failures:
         ctx.log_stage(stage, run_dir.name, "no_failures")
@@ -588,7 +656,13 @@ def diagnose_run(
         seed=ctx.config.seed,
     )
     out = diagnosis_dir(run_dir)
-    guard = ctx.guard if stage == "E0b" else (lambda: None)
+    guard: Callable[[], None]
+    if stage == "E0b":
+        guard = ctx.guard
+    elif stage == "E0c":
+        guard = ctx.guard_e0c
+    else:
+        guard = lambda: None  # noqa: E731
     if not (diagnosis_dir(ref_dir) / "genuineness.json").is_file():
         ctx.log_stage(stage, run_dir.name, "genuineness_start")
         ref_ledger = Ledger(ref_dir / LEDGER_FILENAME, ref_dir.name)
@@ -652,6 +726,8 @@ def diagnose_run(
                 resume=True,
                 workers=workers,
                 before_each=guard,
+                schedule=schedule,
+                priority=priority,
             )
             ctx.log_stage(stage, run_dir.name, "replay_done")
         if full_arms_keys and not (out / "replays_replay_full.json").is_file():
@@ -1183,14 +1259,17 @@ def pass_runs(
     *,
     reference: bool = False,
     marker: str = "manifest.json",
+    prefix: str = "e0b",
 ) -> list[Path]:
     """Runs ``e0b-<block>-<source>-p<n>`` (``...-p<n>-ref`` when ``reference``) that have
     ``marker``, in pass order. A plain ``p*`` glob also matches the ``-ref`` runs, which are
     reference-mode retries of the failed tasks, not passes: B7 once pooled artifacts from one."""
     suffix = "-ref" if reference else ""
-    pattern = re.compile(rf"e0b-{re.escape(block)}-{re.escape(source)}-p(\d+){suffix}")
+    pattern = re.compile(
+        rf"{re.escape(prefix)}-{re.escape(block)}-{re.escape(source)}-p(\d+){suffix}"
+    )
     found: list[tuple[int, Path]] = []
-    for d in runs_root.glob(f"e0b-{block}-{source}-p*{suffix}"):
+    for d in runs_root.glob(f"{prefix}-{block}-{source}-p*{suffix}"):
         m = pattern.fullmatch(d.name)
         if m is not None and (d / marker).is_file():
             found.append((int(m.group(1)), d))
@@ -1225,7 +1304,9 @@ def diagnosed_runs(ctx: E0Context) -> dict[str, list[tuple[Path, Path]]]:
     for source in ctx.spec.sources:
         if not bool(ctx.spec.scope(source).get("diagnosis")):
             continue
-        for run_dir in pass_runs(ctx.runs_root, "b1", source, marker="summary.json"):
+        for run_dir in pass_runs(
+            ctx.runs_root, "b1", source, marker="summary.json", prefix=ctx.spec.run_prefix
+        ):
             ref_dir = ctx.runs_root / f"{run_dir.name}-ref"
             if (run_dir / "diagnosis" / "clusters.json").is_file() and ref_dir.is_dir():
                 out.setdefault(source, []).append((run_dir, ref_dir))
@@ -1250,6 +1331,28 @@ def e0d_b_escalate(ctx: E0Context, run_dir: Path, ref_dir: Path, *, taskset: Tas
     if marker.is_file():
         ctx.log_stage("E0d", run_dir.name, "escalation_skipped", reason="done earlier")
         return
+    rows = _escalate_run(ctx, run_dir, ref_dir, taskset=taskset, stage="E0d")
+    atomic_write_text(
+        marker,
+        json.dumps({"ts": datetime.now(UTC).isoformat(), "escalated_failures": len(rows)}, indent=2)
+        + "\n",
+    )
+
+
+def _escalate_run(
+    ctx: E0Context,
+    run_dir: Path,
+    ref_dir: Path,
+    *,
+    taskset: TaskSet,
+    stage: Stage,
+    reopen_by_key: dict[str, Callable[[CandidateReplay], bool]] | None = None,
+    backup_suffix: str = "pre_m32",
+) -> list[EscalationRow]:
+    """Escalate (E0d-B: marginal candidates; E0c: the given failures and predicates) and
+    re-chain signal -> cluster -> corrupt -> leakage. Returns the escalation rows."""
+    out = diagnosis_dir(run_dir)
+    guard = ctx.guard_e0c if stage == "E0c" else ctx.guard_e0d
     run_ctx, manifest = load_run_context(run_dir)
     assert manifest.harness_snapshot_id is not None and manifest.run_spec is not None
     ledger = Ledger(run_dir / "ledger.e0d.jsonl", run_ctx.run_id)
@@ -1265,7 +1368,7 @@ def e0d_b_escalate(ctx: E0Context, run_dir: Path, ref_dir: Path, *, taskset: Tas
         seed=ctx.config.seed,
         claw_repo=ctx.claw_repo,
     )
-    ctx.log_stage("E0d", run_dir.name, "escalation_start")
+    ctx.log_stage(stage, run_dir.name, "escalation_start")
     with TraceWriter(run_dir / TRACE_FILENAME, run_ctx.run_id) as trace:
         runner = Runner(
             ctx=run_ctx,
@@ -1288,10 +1391,12 @@ def e0d_b_escalate(ctx: E0Context, run_dir: Path, ref_dir: Path, *, taskset: Tas
             max_candidates=ctx.spec.replay.max_candidates,
             economize=ctx.spec.replay.economize,
             workers=ctx.spec.workers_for(source),
-            before_each=ctx.guard_e0d,
+            before_each=guard,
+            reopen_by_key=reopen_by_key,
+            backup_suffix=backup_suffix,
         )
     ctx.log_stage(
-        "E0d",
+        stage,
         run_dir.name,
         "escalation_done",
         failures=len(rows),
@@ -1300,7 +1405,7 @@ def e0d_b_escalate(ctx: E0Context, run_dir: Path, ref_dir: Path, *, taskset: Tas
         usd=round(sum(r.usd for r in rows), 4),
     )
     for name in ("diagnoses.json", "clusters.json", "activity.json", "leakage.json"):
-        src, dst = out / name, out / name.replace(".json", ".pre_m32.json")
+        src, dst = out / name, out / name.replace(".json", f".{backup_suffix}.json")
         if src.is_file() and not dst.is_file():
             shutil.copyfile(src, dst)
     llm = _e0d_llm(ctx, ledger)
@@ -1321,15 +1426,16 @@ def e0d_b_escalate(ctx: E0Context, run_dir: Path, ref_dir: Path, *, taskset: Tas
     )
     corrupt_run(run_dir, seed=ctx.spec.corruption_seed(), manifest=ctx.components)
     leakage_run(run_dir, manifest=ctx.components, llm=llm, prompt_template=leakage.load_prompt())
-    atomic_write_text(
-        marker,
-        json.dumps({"ts": datetime.now(UTC).isoformat(), "escalated_failures": len(rows)}, indent=2)
-        + "\n",
-    )
-    ctx.log_stage("E0d", run_dir.name, "rechain_done")
+    ctx.log_stage(stage, run_dir.name, "rechain_done")
+    return rows
 
 
-def e0d_c_coherent(ctx: E0Context, runs_by_source: dict[str, list[tuple[Path, Path]]]) -> None:
+def e0d_c_coherent(
+    ctx: E0Context,
+    runs_by_source: dict[str, list[tuple[Path, Path]]],
+    *,
+    stage: Stage = "E0d",
+) -> None:
     """E0d-C: COH-WRONG texts for every cluster with >= min_members, parity pooled per source,
     regeneration with a new variant seed on violation (at most max_regenerations times)."""
     block = ctx.spec.e0d_block("C_coherent_wrong")
@@ -1347,13 +1453,19 @@ def e0d_c_coherent(ctx: E0Context, runs_by_source: dict[str, list[tuple[Path, Pa
             and rec.parity_scope == "source"
             for run_dir, _ in runs
         ):
-            ctx.log_stage("E0d", f"e0b-b1-{source}", "coherent_skipped", reason="done earlier")
+            ctx.log_stage(
+                stage,
+                f"{ctx.spec.run_prefix}-b1-{source}",
+                "coherent_skipped",
+                reason="done earlier",
+            )
             continue
         rounds: list[dict[str, JsonValue]] = []
         pooled = None
         generation_seed = 0
+        guard = ctx.guard_e0c if stage == "E0c" else ctx.guard_e0d
         for generation_seed in range(max_regenerations + 1):
-            ctx.guard_e0d()
+            guard()
             scores: list[PlausibilityScore] = []
             for run_dir, _ in runs:
                 record = coherent_round(
@@ -1372,8 +1484,8 @@ def e0d_c_coherent(ctx: E0Context, runs_by_source: dict[str, list[tuple[Path, Pa
                 {"generation_seed": generation_seed, "parity": to_json_value(pooled.model_dump())}
             )
             ctx.log_stage(
-                "E0d",
-                f"e0b-b1-{source}",
+                stage,
+                f"{ctx.spec.run_prefix}-b1-{source}",
                 "coherent_round",
                 generation_seed=generation_seed,
                 n=pooled.n,
@@ -1495,6 +1607,201 @@ def e0d(ctx: E0Context, *, stages: Sequence[str] | None = None) -> None:
     ctx.log_stage("E0d", "-", "e0d_done", spent_usd=round(ctx.spend_e0d(), 4))
 
 
+# ---------------------------------------------------------------- E0c (minimal, owner 2026-09-09)
+
+
+def e0c_preflight(ctx: E0Context) -> dict[str, JsonValue]:
+    """Freeze splits_v2 (v1 plus eval_rest; validation, eval_dev and heldout untouched) at the
+    spec's splits path and record the condition."""
+    v1 = load_splits(SPLITS_PATH)
+    v2 = with_eval_rest(v1, ctx.taskset("evaluation"))
+    path, sha = freeze(v2, ctx.splits_path)
+    ctx.splits_sha256 = sha
+    record: dict[str, JsonValue] = {
+        "ts": datetime.now(UTC).isoformat(),
+        "ok": True,
+        "condition": str(ctx.spec.policy.get("reasoning_effort")),
+        "spec_sha256": ctx.spec_sha256,
+        "splits_path": str(path),
+        "splits_sha256": sha,
+        "eval_rest_per_source": {s: len(v.eval_rest) for s, v in v2.sources.items()},
+    }
+    atomic_write_text(ctx.runs_root / "preflight.json", json.dumps(record, indent=2) + "\n")
+    return record
+
+
+def e0c_failure_priority(run_dirs: Sequence[Path]) -> Callable[[AlignmentRecord], float]:
+    """Failures of tasks that failed most often across the mining passes first: those are
+    the likeliest to form clusters with >= 2 members, so a budget cap cuts singletons."""
+    counts: dict[str, int] = {}
+    for d in run_dirs:
+        for f in task_failures(d):
+            counts[f.task_id] = counts.get(f.task_id, 0) + 1
+
+    def priority(record: AlignmentRecord) -> float:
+        return float(counts.get(record.task_id, 0))
+
+    return priority
+
+
+def e0c_confirm_targets(
+    run_dirs: Sequence[Path], *, min_members: int
+) -> dict[Path, dict[str, Callable[[CandidateReplay], bool]]]:
+    """Per run, the failures (and candidate predicates) to confirm at n >= 5: for every cluster
+    key with >= min_members members across the mining passes, the per-run representative's
+    unconfirmed candidates (oracle and placement steps) and each other member's oracle-step
+    candidate."""
+    merged: dict[tuple[str, str], list[tuple[Path, str, bool]]] = {}
+    for d in run_dirs:
+        if not (diagnosis_dir(d) / "clusters.json").is_file():
+            continue
+        clusters, _ = load_clusters(d)
+        for c in clusters.clusters:
+            for member in c.members:
+                merged.setdefault((c.cause_label, c.component), []).append(
+                    (d, member, member == c.representative)
+                )
+    targets: dict[Path, dict[str, Callable[[CandidateReplay], bool]]] = {}
+    for members in merged.values():
+        if len(members) < min_members:
+            continue
+        for d, member, is_representative in members:
+            task_id, replicate, attempt = member.rsplit("/", 2)
+            key = safe_key(task_id, replicate, int(attempt))
+            replay = load_replays(d).get(key)
+            if replay is None:
+                continue
+            predicate: Callable[[CandidateReplay], bool] = (
+                unconfirmed if is_representative else _oracle_only(replay.oracle_step)
+            )
+            if any(predicate(c) for c in replay.candidates):
+                targets.setdefault(d, {})[key] = predicate
+    return targets
+
+
+def _oracle_only(oracle: int | None) -> Callable[[CandidateReplay], bool]:
+    def predicate(c: CandidateReplay) -> bool:
+        return unconfirmed(c) and c.step == oracle
+
+    return predicate
+
+
+def e0c_confirm(
+    ctx: E0Context,
+    runs: Sequence[tuple[Path, Path]],
+    *,
+    taskset: TaskSet,
+    min_members: int,
+    max_rounds: int,
+) -> None:
+    """Owner (E0c): oracle steps and corruption-placement steps are confirmed at n >= 5 ONLY
+    for clusters entering E2. Rounds repeat while a confirmation changes the clusters."""
+    for round_index in range(max_rounds):
+        targets = e0c_confirm_targets([d for d, _ in runs], min_members=min_members)
+        ctx.log_stage(
+            "E0c",
+            "-",
+            "confirm_round",
+            round=round_index,
+            failures=sum(len(v) for v in targets.values()),
+        )
+        if not targets:
+            break
+        for run_dir, ref_dir in runs:
+            reopen_by_key = targets.get(run_dir)
+            if not reopen_by_key:
+                continue
+            ctx.guard_e0c()
+            _escalate_run(
+                ctx,
+                run_dir,
+                ref_dir,
+                taskset=taskset,
+                stage="E0c",
+                reopen_by_key=reopen_by_key,
+                backup_suffix="pre_confirm",
+            )
+
+
+def e0c(ctx: E0Context, *, stages: Sequence[str] | None = None) -> None:
+    """E0c (minimal): low reasoning effort on the v2 mining pool (validation, eval_dev,
+    eval_rest), 3 mining passes, 4 held-out passes, references -> genuineness -> alignment ->
+    first-stage replay -> clusters -> confirmation for the clusters entering E2 -> COH-WRONG
+    parity -> feasibility. Every stage checks the E0c cap."""
+    e0c_preflight(ctx)
+    splits = load_splits(ctx.splits_path)
+    all_tasks = ctx.all_tasks()
+    block = ctx.spec.E0c
+    source = str(block.get("source", "claw_eval"))
+    mining_passes = _int(block.get("mining_passes"), 3)
+    heldout_passes = _int(block.get("heldout_passes"), 4)
+    replay_block = ctx.spec.e0c_block("replay")
+    first_stage = _int(replay_block.get("first_stage"), 3)
+    max_rounds = _int(replay_block.get("max_confirm_rounds"), 3)
+    min_members = _int(ctx.spec.e0d_block("C_coherent_wrong").get("min_members"), 2)
+    prefix = ctx.spec.run_prefix
+    order = tuple(stages) if stages else ("B1", "B2", "B3-6", "CONFIRM", "C")
+    pool = [all_tasks.by_id(t) for t in splits.mining_pool(source, with_rest=True)]
+    heldout = [all_tasks.by_id(t) for t in splits.sources[source].heldout]
+    b1: list[Path] = []
+    for stage_name in order:
+        if stage_name == "B1":
+            b1 = [
+                run_or_resume(
+                    ctx,
+                    run_id=f"{prefix}-b1-{source}-p{p}",
+                    tasks=pool,
+                    mode="normal",
+                    replicates=trials_for(source),
+                    stage="E0c",
+                    workers=ctx.spec.workers_for(source),
+                )
+                for p in range(1, mining_passes + 1)
+            ]
+        elif stage_name == "B2":
+            for p in range(1, heldout_passes + 1):
+                run_or_resume(
+                    ctx,
+                    run_id=f"{prefix}-b2-{source}-p{p}",
+                    tasks=heldout,
+                    mode="normal",
+                    replicates=trials_for(source),
+                    stage="E0c",
+                    workers=ctx.spec.workers_for(source),
+                )
+        elif stage_name in ("B3-6", "CONFIRM", "C"):
+            if not b1:
+                b1 = pass_runs(ctx.runs_root, "b1", source, marker="summary.json", prefix=prefix)
+            if stage_name == "B3-6":
+                priority = e0c_failure_priority(b1)
+                for run_dir in b1:
+                    ctx.guard_e0c()
+                    diagnose_run(
+                        ctx,
+                        run_dir,
+                        stage="E0c",
+                        taskset=all_tasks,
+                        corruption_seed=ctx.spec.corruption_seed(),
+                        schedule=(first_stage,),
+                        priority=priority,
+                    )
+            else:
+                runs = [
+                    (d, ctx.runs_root / f"{d.name}-ref")
+                    for d in b1
+                    if (diagnosis_dir(d) / "clusters.json").is_file()
+                ]
+                if stage_name == "CONFIRM":
+                    e0c_confirm(
+                        ctx, runs, taskset=all_tasks, min_members=min_members, max_rounds=max_rounds
+                    )
+                else:
+                    e0d_c_coherent(ctx, {source: runs}, stage="E0c")
+        else:
+            raise ConfigError(f"unknown E0c stage {stage_name!r}; known: B1 B2 B3-6 CONFIRM C")
+    ctx.log_stage("E0c", "-", "e0c_done", spent_usd=round(ctx.spend_e0c(), 4))
+
+
 __all__ = [
     "E0Context",
     "E0Spec",
@@ -1506,6 +1813,11 @@ __all__ = [
     "diagnose_run",
     "diagnosed_runs",
     "e0b",
+    "e0c",
+    "e0c_confirm",
+    "e0c_confirm_targets",
+    "e0c_failure_priority",
+    "e0c_preflight",
     "e0d",
     "e0d_a_seed_noise",
     "e0d_b_escalate",

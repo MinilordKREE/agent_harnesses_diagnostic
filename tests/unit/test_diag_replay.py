@@ -25,6 +25,7 @@ from ahd.diagnosis.replay import (
     manifestation_step,
     prefix_payload,
     reference_message_at,
+    unconfirmed,
     verdict_of,
 )
 from ahd.harness.components import ComponentManifest
@@ -579,3 +580,39 @@ def test_manifestation_step_is_the_last_class_candidate() -> None:
     empty = align(failed, failed, task_id=TASK, failed_exit_reason="finished")
     assert manifestation_step(empty) is None
     assert classify(()) == "unreplayable"
+
+
+def test_truncated_schedule_leaves_unconfirmed_verdicts_that_escalate_later(
+    setup: Setup, taskset: TaskSet
+) -> None:
+    setup.worker.outcomes.update({("control", i): "fail" for i in range(1, 13)})
+    failed, reference, alignment = _pair()
+    first = setup.replayer(schedule=(3,)).validate(
+        taskset.by_id(TASK),
+        failed_trajectory=failed,
+        reference_trajectory=reference,
+        alignment=alignment,
+        replicate="r1",
+        attempt=1,
+        recorded_workspace="/old/ws",
+    )
+    c = first.candidates[0]
+    assert c.verdict == "positive" and not c.confirmed and c.n == 3 and first.schedule == (3,)
+    assert unconfirmed(c) and not is_marginal(c)  # 3/3 vs 0/3 is not marginal, but unconfirmed
+    assert first.failure_type == "deterministic" and first.oracle_step == 3
+    assert _policy_requests(setup) == 6
+    confirmed = setup.replayer().escalate(
+        taskset.by_id(TASK),
+        first,
+        failed_trajectory=failed,
+        reference_trajectory=reference,
+        alignment=alignment,
+        recorded_workspace="/old/ws",
+        reopen=unconfirmed,
+    )
+    setup.trace.close()
+    c2 = confirmed.candidates[0]
+    assert c2.verdict == "positive" and c2.confirmed and c2.n == 5
+    assert _policy_requests(setup) == 10  # k4, k5 of both arms only
+    with pytest.raises(ValueError, match="schedule"):
+        setup.replayer(schedule=(5, 3))
